@@ -57,7 +57,7 @@ def dump(fn_root, tfrecord_dir, max_res, expected_images, shards, write):
                    if img_fn.endswith('.png')]
     num_examples = len(img_fn_list)
     print("Found", num_examples)
-    assert num_examples == expected_images
+    # assert num_examples == expected_images
 
     # Sharding
     tfr_opt = tf.python_io.TFRecordOptions(
@@ -111,6 +111,7 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser()
+    parser.add_argument("inp_dir", type=str, help="input dir")
     parser.add_argument("--res", type=int, default=32, help="Image size")
     parser.add_argument("--tfrecord_dir", type=str,
                         required=True, help='place to dump')
@@ -121,7 +122,7 @@ if __name__ == "__main__":
     # Imagenet
     _NUM_IMAGES = {
         'train': 1281148,
-        'validation': 50000,
+        'validation': 50000-1,
     }
 
     _NUM_SHARDS = {
@@ -130,11 +131,12 @@ if __name__ == "__main__":
     }
 
     _FILE = {
-        'train': 'train_%dx%d' % (hps.res, hps.res),
-        'validation': 'valid_%dx%d' % (hps.res, hps.res),
+        'train': '%s/train_%dx%d' % (hps.inp_dir, hps.res, hps.res),
+        'validation': '%s/valid_%dx%d' % (hps.inp_dir, hps.res, hps.res),
     }
 
-    for split in ['validation', 'train']:
+    # for split in ['validation', 'train']:
+    for split in ['train']:
         fn_root = _FILE[split]
         tfrecord_dir = os.path.join(hps.tfrecord_dir, split)
         total_imgs = _NUM_IMAGES[split]

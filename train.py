@@ -190,6 +190,8 @@ def main(hps):
             # Run a training step synchronously.
             _t = time.time()
             train_results += [model.train(lr)]
+
+            print(train_results)
             if hps.verbose and hvd.rank() == 0:
                 _print(n_processed, time.time()-_t, train_results[-1])
                 sys.stdout.flush()
