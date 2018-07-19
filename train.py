@@ -5,12 +5,19 @@
 import os
 import sys
 import time
+from data_loaders.read_tf_records2 import build_tfrecord_single
+from data_loaders.read_tf_records2 import CONF as CARTGRIPPER_CONF
+import matplotlib.pyplot as plt
 
 import horovod.tensorflow as hvd
 import numpy as np
 import tensorflow as tf
 import graphics
 from utils import ResultLogger
+
+import pdb
+
+from data_loaders.get_data import make_batch
 
 learn = tf.contrib.learn
 
@@ -73,13 +80,13 @@ def init_visualizations(hps, model, logdir):
 def get_data(hps, sess):
     if hps.image_size == -1:
         hps.image_size = {'mnist': 32, 'cifar10': 32, 'imagenet-oord': 64,
-                          'imagenet': 256, 'celeba': 256, 'lsun_realnvp': 64, 'lsun': 256}[hps.problem]
+                          'imagenet': 256, 'celeba': 256, 'lsun_realnvp': 64, 'lsun': 256, 'cartgripper':64}[hps.problem]
     if hps.n_test == -1:
         hps.n_test = {'mnist': 10000, 'cifar10': 10000, 'imagenet-oord': 50000, 'imagenet': 50000,
-                      'celeba': 3000, 'lsun_realnvp': 300*hvd.size(), 'lsun': 300*hvd.size()}[hps.problem]
+                      'celeba': 3000, 'lsun_realnvp': 300*hvd.size(), 'lsun': 300*hvd.size(), 'cartgripper': 5000}[hps.problem]
     hps.n_y = {'mnist': 10, 'cifar10': 10, 'imagenet-oord': 1000,
-               'imagenet': 1000, 'celeba': 1, 'lsun_realnvp': 1, 'lsun': 1}[hps.problem]
-    if hps.data_dir == "":
+               'imagenet': 1000, 'celeba': 1, 'lsun_realnvp': 1, 'lsun': 1, 'cartgripper':1}[hps.problem]
+    if hps.data_dir == "" and hps.problem != 'cartgripper':
         hps.data_dir = {'mnist': None, 'cifar10': None, 'imagenet-oord': '/mnt/host/imagenet-oord-tfr', 'imagenet': '/mnt/host/imagenet-tfr',
                         'celeba': '/mnt/host/celeba-reshard-tfr', 'lsun_realnvp': '/mnt/host/lsun_realnvp', 'lsun': '/mnt/host/lsun'}[hps.problem]
 
@@ -117,6 +124,17 @@ def get_data(hps, sess):
             v.get_data(hps.problem, hvd.size(), hvd.rank(), hps.dal, hps.local_batch_train,
                        hps.local_batch_test, hps.local_batch_init,  hps.image_size)
 
+    elif hps.problem == 'cartgripper':
+        hps.direct_iterator = True
+
+        CARTGRIPPER_CONF['batch_size'] = hps.local_batch_train
+        train_iterator = build_tfrecord_single(CARTGRIPPER_CONF, 'train')
+
+        CARTGRIPPER_CONF['batch_size'] = hps.local_batch_test
+        test_iterator = build_tfrecord_single(CARTGRIPPER_CONF, 'train')
+
+        data_init = make_batch(sess, train_iterator, hps.local_batch_train, hps.local_batch_init)
+
     else:
         raise Exception()
 
@@ -147,6 +165,9 @@ def main(hps):
     # Get data and set train_its and valid_its
     train_iterator, test_iterator, data_init = get_data(hps, sess)
     hps.train_its, hps.test_its, hps.full_test_its = get_its(hps)
+
+    ### debug:
+    # sess.run(train_iterator.get_next())
 
     # Create log dir
     logdir = os.path.abspath(hps.logdir) + "/"
@@ -181,6 +202,8 @@ def main(hps):
         t = time.time()
 
         train_results = []
+
+        print('starting epoch: ', epoch)
         for it in range(hps.train_its):
 
             # Set learning rate, linearly annealed from 0 in the first hps.epochs_warmup epochs.
@@ -191,15 +214,19 @@ def main(hps):
             _t = time.time()
             train_results += [model.train(lr)]
 
-            print(train_results)
-            if hps.verbose and hvd.rank() == 0:
-                _print(n_processed, time.time()-_t, train_results[-1])
-                sys.stdout.flush()
+            if it % 100 == 0:
+                print('itr {} starting epoch {}, results [local_loss, bits_x, bits_y, pred_loss]: {}'.format(it, epoch, train_results[-1]))
+
+            # print(train_results)
+            # if hps.verbose and hvd.rank() == 0:
+            #     _print(n_processed, time.time()-_t, train_results[-1])
+            #     sys.stdout.flush()
 
             # Images seen wrt anchor resolution
             n_processed += hvd.size() * hps.n_batch_train
             # Actual images seen at current resolution
             n_images += hvd.size() * hps.local_batch_train
+
 
         train_results = np.mean(np.asarray(train_results), axis=0)
 
@@ -211,6 +238,7 @@ def main(hps):
             train_logger.log(epoch=epoch, n_processed=n_processed, n_images=n_images, train_time=int(
                 train_time), **process_results(train_results))
 
+        # pdb.set_trace()
         if epoch < 10 or (epoch < 50 and epoch % 10 == 0) or epoch % hps.epochs_full_valid == 0:
             test_results = []
             msg = ''

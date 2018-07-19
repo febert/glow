@@ -72,8 +72,6 @@ def get_data(sess, data_dir, shards, rank, pmap, fmap, n_batch_train, n_batch_te
 
     return train_itr, valid_itr, data_init
 
-#
-
 
 def make_batch(sess, itr, itr_batch_size, required_batch_size):
     ib, rb = itr_batch_size, required_batch_size

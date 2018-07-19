@@ -1,4 +1,5 @@
 import tensorflow as tf
+import pdb
 
 import tfops as Z
 import optim
@@ -84,6 +85,8 @@ def codec(hps):
     def encoder(z, objective):
 
         for i in range(hps.n_levels):
+            # z_shape = z.get_shape().as_list()
+            # print('input layer shape {}, num_dim {}'.format(i, z_shape[1]*z_shape[2]*z_shape[3]), z.get_shape())
             z, objective = revnet2d(str(i), z, objective, hps)
             if i < hps.n_levels-1:
                 z, objective = split2d("pool"+str(i), z, objective=objective)
