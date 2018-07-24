@@ -196,11 +196,13 @@ def main(hps):
         train_logger = ResultLogger(logdir + "train.txt", **hps.__dict__)
         test_logger = ResultLogger(logdir + "test.txt", **hps.__dict__)
 
+
+    print('saving initial weights')
+    model.save(logdir+"model_initial_weights.ckpt")
+
     tcurr = time.time()
     for epoch in range(1, hps.epochs):
-
         t = time.time()
-
         train_results = []
 
         print('starting epoch: ', epoch)
@@ -238,7 +240,7 @@ def main(hps):
             train_logger.log(epoch=epoch, n_processed=n_processed, n_images=n_images, train_time=int(
                 train_time), **process_results(train_results))
 
-        # pdb.set_trace()
+
         if epoch < 10 or (epoch < 50 and epoch % 10 == 0) or epoch % hps.epochs_full_valid == 0:
             test_results = []
             msg = ''
@@ -276,7 +278,6 @@ def main(hps):
                 _print(epoch, n_processed, n_images, "{:.1f} {:.1f} {:.1f} {:.1f} {:.1f}".format(
                     ips, dtrain, dtest, dsample, dcurr), train_results, test_results, msg)
 
-            # model.polyak_swap()
 
     if hvd.rank() == 0:
         _print("Finished!")

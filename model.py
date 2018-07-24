@@ -13,7 +13,11 @@ f_loss: function with as input the (x,y,reuse=False), and as output a list/tuple
 '''
 
 
-def abstract_model_xy(sess, hps, feeds, train_iterator, test_iterator, data_init, lr, f_loss):
+
+
+
+
+def abstract_model_xy(sess, hps, feeds, train_iterator, test_iterator, data_init, lr, f_loss, train=True):
 
     # == Create class with static fields and methods
     class m(object):
@@ -22,20 +26,24 @@ def abstract_model_xy(sess, hps, feeds, train_iterator, test_iterator, data_init
     m.feeds = feeds
     m.lr = lr
 
+
     # === Loss and optimizer
     loss_train, stats_train = f_loss(train_iterator, True)
     all_params = tf.trainable_variables()
-    if hps.gradient_checkpointing == 1:
-        from memory_saving_gradients import gradients
-        gs = gradients(loss_train, all_params)
-    else:
-        gs = tf.gradients(loss_train, all_params)
 
-    optimizer = {'adam': optim.adam, 'adamax': optim.adamax,
-                 'adam2': optim.adam2}[hps.optimizer]
+    if train:
+        if hps.gradient_checkpointing == 1:
+            from memory_saving_gradients import gradients
+            gs = gradients(loss_train, all_params)
+        else:
+            gs = tf.gradients(loss_train, all_params)
 
-    train_op, polyak_swap_op, ema = optimizer(
-        all_params, gs, alpha=lr, hps=hps)
+        optimizer = {'adam': optim.adam, 'adamax': optim.adamax,
+                     'adam2': optim.adam2}[hps.optimizer]
+
+        train_op, polyak_swap_op, ema = optimizer(
+            all_params, gs, alpha=lr, hps=hps)
+
     if hps.direct_iterator:
         m.train = lambda _lr: sess.run([train_op, stats_train], {lr: _lr})[1]
     else:
@@ -60,14 +68,16 @@ def abstract_model_xy(sess, hps, feeds, train_iterator, test_iterator, data_init
 
     # === Saving and restoring
     saver = tf.train.Saver()
-    saver_ema = tf.train.Saver(ema.variables_to_restore())
-    m.save_ema = lambda path: saver_ema.save(
-        sess, path, write_meta_graph=False)
-    m.save = lambda path: saver.save(sess, path, write_meta_graph=False)
+    if train:
+        saver_ema = tf.train.Saver(ema.variables_to_restore())
+        m.save_ema = lambda path: saver_ema.save(
+            sess, path, write_meta_graph=False)
+        m.save = lambda path: saver.save(sess, path, write_meta_graph=False)
     m.restore = lambda path: saver.restore(sess, path)
 
     # === Initialize the parameters
     if hps.restore_path != '':
+         
         m.restore(hps.restore_path)
     else:
         with Z.arg_scope([Z.get_variable_ddi, Z.actnorm], init=True):
@@ -83,21 +93,25 @@ def abstract_model_xy(sess, hps, feeds, train_iterator, test_iterator, data_init
 def codec(hps):
 
     def encoder(z, objective):
-
+        print('building encoder')
+        z_all = []
         for i in range(hps.n_levels):
-            # z_shape = z.get_shape().as_list()
-            # print('input layer shape {}, num_dim {}'.format(i, z_shape[1]*z_shape[2]*z_shape[3]), z.get_shape())
+            z_shape = z.get_shape().as_list()
+            print('encoder layer {} shape {}, num_dim {}'.format(i, z.get_shape(), z_shape[1]*z_shape[2]*z_shape[3]))
             z, objective = revnet2d(str(i), z, objective, hps)
             if i < hps.n_levels-1:
-                z, objective = split2d("pool"+str(i), z, objective=objective)
+                z, z_all, objective = split2d("pool"+str(i), z, z_all, objective=objective)
+        z_all.append(z)
+        return z, z_all, objective
 
-        return z, objective
-
-    def decoder(z, eps_std):
+    def decoder(z, eps_std, z_all=None):
+        print('building decoder')
 
         for i in reversed(range(hps.n_levels)):
+            z_shape = z.get_shape().as_list()
+            print('encoder layer {} shape {}, num_dim {}'.format(i, z.get_shape(), z_shape[1]*z_shape[2]*z_shape[3]))
             if i < hps.n_levels-1:
-                z = split2d_reverse("pool"+str(i), z, eps_std=eps_std)
+                z = split2d_reverse("pool"+str(i), z, z_all, eps_std=eps_std)
             z, _ = revnet2d(str(i), z, 0, hps, reverse=True)
 
         return z
@@ -134,7 +148,7 @@ def prior(name, y_onehot, hps):
     return logp, sample
 
 
-def model(sess, hps, train_iterator, test_iterator, data_init):
+def model(sess, hps, train_iterator, test_iterator, data_init, train=True):
 
     # Only for decoding/init, rest use iterators directly
     with tf.name_scope('input'):
@@ -171,7 +185,10 @@ def model(sess, hps, train_iterator, test_iterator, data_init):
             # Encode
             z = Z.squeeze2d(z, 2)  # > 16x16x12
 
-            z, objective = encoder(z, objective)
+             
+            z, z_all, objective = encoder(z, objective)
+
+             
 
             hps.top_shape = Z.int_shape(z)[1:]
 
@@ -236,9 +253,41 @@ def model(sess, hps, train_iterator, test_iterator, data_init):
 
         return tf.reduce_mean(local_loss), global_stats
 
+
+    def build_exmp_encoder(x_pl, reuse=False):
+        """
+        Encode a batch of examples into latents
+        :param iterator:
+        :return: batch of latents
+        """
+
+        z = preprocess(x_pl)
+        # z = z + tf.random_uniform(tf.shape(z), 0, 1. / hps.n_bins)
+
+        with tf.variable_scope('model', reuse=reuse):
+            # Encode
+            z = Z.squeeze2d(z, 2)  # > 16x16x12
+            objective = tf.zeros_like(z, dtype='float32')[:, 0, 0, 0]
+            z, z_all, objective = encoder(z, objective)
+
+        return z_all
+
+
+    def build_exmp_decoder(z_all):
+        """
+        Decode (possibly interpolated) latent into image
+        """
+        with tf.variable_scope('model', reuse=True):
+            z_start = z_all.pop(-1)
+            z = decoder(z_start, z_all=z_all, eps_std=0)
+            z = Z.unsqueeze2d(z, 2)
+            x = postprocess(z)
+        return x
+
+
     feeds = {'x': X, 'y': Y}
     m = abstract_model_xy(sess, hps, feeds, train_iterator,
-                          test_iterator, data_init, lr, f_loss)
+                          test_iterator, data_init, lr, f_loss, train=train)
 
     # === Decoding functions
     m.eps_std = tf.placeholder(tf.float32, [None], name='eps_std')
@@ -247,6 +296,10 @@ def model(sess, hps, train_iterator, test_iterator, data_init):
     def m_decode(_y, _eps_std):
         return m.sess.run(x_sampled, {Y: _y, m.eps_std: _eps_std})
     m.decode = m_decode
+
+    m.build_exmp_encoder = build_exmp_encoder
+    m.build_exmp_decoder = build_exmp_decoder
+    m.Y = Y
 
     return m
 
@@ -267,11 +320,13 @@ def revnet2d(name, z, logdet, hps, reverse=False):
     with tf.variable_scope(name):
         if not reverse:
             for i in range(hps.depth):
+                # print('enc building depth {}'.format(i))
                 z, logdet = checkpoint(z, logdet)
                 z, logdet = revnet2d_step(str(i), z, logdet, hps, reverse)
             z, logdet = checkpoint(z, logdet)
         else:
             for i in reversed(range(hps.depth)):
+                # print('dec building depth {}'.format(i))
                 z, logdet = revnet2d_step(str(i), z, logdet, hps, reverse)
     return z, logdet
 
@@ -480,25 +535,31 @@ def invertible_1x1_conv(name, z, logdet, reverse=False):
 
 
 @add_arg_scope
-def split2d(name, z, objective=0.):
+def split2d(name, z, z_all=None, objective=0.):
     with tf.variable_scope(name):
         n_z = Z.int_shape(z)[3]
         z1 = z[:, :, :, :n_z // 2]
         z2 = z[:, :, :, n_z // 2:]
         pz = split2d_prior(z1)
         objective += pz.logp(z2)
+        z_all.append(z2)
         z1 = Z.squeeze2d(z1)
-        return z1, objective
+        return z1, z_all, objective
 
 
 @add_arg_scope
-def split2d_reverse(name, z, eps_std=None):
+def split2d_reverse(name, z, z_all, eps_std=None):
     with tf.variable_scope(name):
         z1 = Z.unsqueeze2d(z)
-        pz = split2d_prior(z1)
-        z2 = pz.sample
-        if eps_std is not None:
-            z2 = pz.sample2(pz.eps * tf.reshape(eps_std, [-1, 1, 1, 1]))
+
+        if z_all is not None:
+            z2 = z_all.pop(-1)
+        else:
+            pz = split2d_prior(z1)
+            z2 = pz.sample
+            if eps_std is not None:
+                z2 = pz.sample2(pz.eps * tf.reshape(eps_std, [-1, 1, 1, 1]))
+
         z = tf.concat([z1, z2], 3)
         return z
 

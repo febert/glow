@@ -2,11 +2,13 @@ import numpy as np
 from PIL import Image
 import time
 import threading
+import pdb
+import moviepy.editor as mpy
 
 
 def save_image(x, path):
     im = Image.fromarray(x)
-    im.save(path, optimize=True)
+    im.save(path + '.png', optimize=True)
     return
 
 # Assumes [NCHW] format
@@ -76,3 +78,37 @@ def to_raster(x, rescale=False, width=None):
             result[i * tile_height:(i + 1) * tile_height, j *
                    tile_width:(j + 1) * tile_width] = x[width*i+j]
     return result
+
+def save_interpolations(images, path):
+    # save_image(arange_interpolations(images), path)
+    arange_gif(images, path)
+
+def arange_gif(images, path):
+    tlist = []
+    for im in images:
+        splitted = np.split(im, im.shape[0], 0)
+        squeezed = [im.squeeze() for im in splitted]
+        tstep = np.concatenate(squeezed, axis=1)
+        tlist.append(tstep)
+
+    clip = mpy.ImageSequenceClip(tlist, fps=4)
+    clip.write_gif(path + '.gif')
+
+def arange_interpolations(images):
+    """
+    list of image-batches at different interplation levles
+    :param images:
+    :return:
+    """
+    ncols = len(images)
+    bsize = images[0].shape[0]
+
+    cols = []
+    for c in range(ncols):
+        colimages = []
+        for b in range(bsize):
+            colimages.append(images[c][b])
+        cols.append(np.concatenate(colimages, axis=0))
+    combined = np.concatenate(cols, axis=1)
+
+    return combined
