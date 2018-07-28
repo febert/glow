@@ -126,6 +126,15 @@ def get_data(hps, sess):
 
     elif hps.problem == 'cartgripper':
         hps.direct_iterator = True
+        CARTGRIPPER_CONF['data_dir'] = hps.data_dir
+        if 'weiss_gripper_20k' in hps.data_dir:
+            CARTGRIPPER_CONF['sdim'] = 4
+            CARTGRIPPER_CONF['adim'] = 5
+            CARTGRIPPER_CONF['orig_size'] = [64, 64]
+        elif 'autograsp_bowls' in hps.data_dir:
+            CARTGRIPPER_CONF['sdim'] = 5
+            CARTGRIPPER_CONF['adim'] = 4
+            CARTGRIPPER_CONF['orig_size'] = [48, 64]
 
         CARTGRIPPER_CONF['batch_size'] = hps.local_batch_train
         train_iterator = build_tfrecord_single(CARTGRIPPER_CONF, 'train')

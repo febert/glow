@@ -143,12 +143,8 @@ def build_tfrecord_single(conf, mode='train', input_files=None, shuffle=True, bu
         images = image_seq[rand_ind]
 
         #padding with zeros to make it square
-        zero_pad = tf.zeros([64 - 48, 64, 3], dtype=tf.uint8)
+        zero_pad = tf.zeros([64 - conf['orig_size'][0], 64, 3], dtype=tf.uint8)
         images = tf.concat([images, zero_pad], axis=0)
-
-       ###########################################################################################################
-        # only for debug
-        # images = tf.zeros_like(images)*255
 
         if 'use_cam' in conf:
             images = images[:,conf['use_cam']]
@@ -173,21 +169,18 @@ def build_tfrecord_single(conf, mode='train', input_files=None, shuffle=True, bu
 
 
 CONF = {}
-DATA_DIR = os.environ['VMPC_DATA_DIR'] + '/sawyer_sim/autograsp_bowls/good'
 
 CONF['schedsamp_k'] = -1  # don't feed ground truth
-CONF['data_dir'] = DATA_DIR  # 'directory containing data_files.' ,
 CONF['skip_frame'] = 1
 CONF['train_val_split']= 0.95
 CONF['sequence_length']= 30  #48      # 'sequence length, including context frames.'
 CONF['batch_size'] = 15
 CONF['visualize'] = False
 CONF['context_frames'] = 2
-CONF['ncam'] = 2
+CONF['ncam'] = 1
 CONF['view'] = 0   # only first view
 CONF['sdim'] = 5
 CONF['adim'] = 4
-CONF['orig_size'] = [48, 64]
 
 
 def main():
