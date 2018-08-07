@@ -234,7 +234,7 @@ def main(hps):
 
         if epoch % summ_interval == 0:
             draw_samples(sess, hps, model, summary_writer, epoch, mode=1)
-            draw_samples(sess, hps, model, summary_writer, epoch, mode=0)
+            # draw_samples(sess, hps, model, summary_writer, epoch, mode=0)
 
         print('starting epoch: ', epoch)
         for it in range(hps.train_its):

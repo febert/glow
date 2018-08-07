@@ -324,11 +324,13 @@ def model(sess, hps, train_iterator, test_iterator, data_init, train=True):
 
     # === Decoding functions
     m.eps_std = tf.placeholder(tf.float32, [None], name='eps_std')
-    m.train_cond = tf.placeholder(tf.int64, (), 'traincond')
-    train_test_data = tf.cond(m.train_cond > 0,
-                   # if 1 use trainigbatch else validation batch
-                   train_iterator.get_next,
-                   test_iterator.get_next)[0]
+    # m.train_cond = tf.placeholder(tf.int64, (), 'traincond')
+    # train_test_data = tf.cond(m.train_cond > 0,
+    #                # if 1 use trainigbatch else validation batch
+    #                train_iterator.get_next,
+    #                test_iterator.get_next)[0]
+    train_test_data = train_iterator.get_next()[0]
+
     #pick the first timestep
     train_test_data = train_test_data[:, :ncontxt]
 
