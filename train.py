@@ -78,8 +78,8 @@ def sample_images(eps, sess, model, summary_writer, itr, bsize, sum_op, mode):
 
     y = np.zeros(bsize, dtype='int32')
     feed_dict = {model.Y: y,
-                 model.eps_std: np.ones(bsize)*eps,
-                 model.train_cond: mode}
+                 model.eps_std: np.ones(bsize)*eps}
+                 # model.train_cond: mode}
 
     [summary_str] = sess.run([sum_op],  feed_dict)
     summary_writer.add_summary(summary_str, itr)
