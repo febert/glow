@@ -207,6 +207,7 @@ def main(hps):
     # Create model
     import model
     model = model.model(sess, hps, train_iterator, test_iterator, data_init)
+    tf.add_check_numerics_ops()
 
     summary_writer = tf.summary.FileWriter(hps.logdir, graph=sess.graph, flush_secs=10)
 
@@ -219,7 +220,6 @@ def main(hps):
     n_processed = 0
     n_images = 0
     train_time = 0.0
-    test_loss_best = 999999
 
     if hvd.rank() == 0:
         train_logger = ResultLogger(logdir + "train.txt", **hps.__dict__)
