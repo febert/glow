@@ -207,7 +207,7 @@ def main(hps):
     # Create model
     import model
     model = model.model(sess, hps, train_iterator, test_iterator, data_init)
-    tf.add_check_numerics_ops()
+    # tf.add_check_numerics_ops()
 
     summary_writer = tf.summary.FileWriter(hps.logdir, graph=sess.graph, flush_secs=10)
 
