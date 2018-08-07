@@ -339,17 +339,31 @@ def squeeze2d(x, factor=2):
     assert factor >= 1
     if factor == 1:
         return x
-    shape = x.get_shape()
-    height = int(shape[1])
-    width = int(shape[2])
-    n_channels = int(shape[3])
-    assert height % factor == 0 and width % factor == 0
-    x = tf.reshape(x, [-1, height//factor, factor,
-                       width//factor, factor, n_channels])
-    x = tf.transpose(x, [0, 1, 3, 5, 2, 4])
-    x = tf.reshape(x, [-1, height//factor, width //
-                       factor, n_channels*factor*factor])
-    return x
+    if len(x.get_shape().as_list()) == 4:
+        shape = x.get_shape()
+        height = int(shape[1])
+        width = int(shape[2])
+        n_channels = int(shape[3])
+        assert height % factor == 0 and width % factor == 0
+        x = tf.reshape(x, [-1, height//factor, factor,
+                           width//factor, factor, n_channels])
+        x = tf.transpose(x, [0, 1, 3, 5, 2, 4])
+        x = tf.reshape(x, [-1, height//factor, width //
+                           factor, n_channels*factor*factor])
+        return x
+    else:
+        shape = x.get_shape()
+        tlen = int(shape[1])
+        height = int(shape[2])
+        width = int(shape[3])
+        n_channels = int(shape[4])
+        assert height % factor == 0 and width % factor == 0
+        x = tf.reshape(x, [-1, tlen, height//factor, factor,
+                           width//factor, factor, n_channels])
+        x = tf.transpose(x, [0, 1, 2, 4, 6, 3, 5])  # new order: b, t, newheight, newwidth, nchannel, factor, factor
+        x = tf.reshape(x, [-1, tlen, height//factor, width //
+                           factor, n_channels*factor*factor])
+        return x
 
 
 def unsqueeze2d(x, factor=2):

@@ -137,14 +137,11 @@ def build_tfrecord_single(conf, mode='train', input_files=None, shuffle=True, bu
 
         return_list = []
         image_seq = tf.concat(values=image_seq, axis=0)
-        image_seq = tf.squeeze(image_seq)
-
-        rand_ind = tf.random_uniform((), 0, len(load_indx), dtype=tf.int64)
-        images = image_seq[rand_ind]
+        images = tf.squeeze(image_seq)
 
         #padding with zeros to make it square
-        zero_pad = tf.zeros([64 - conf['orig_size'][0], 64, 3], dtype=tf.uint8)
-        images = tf.concat([images, zero_pad], axis=0)
+        zero_pad = tf.zeros([conf['sequence_length'], 64 - conf['orig_size'][0], 64, 3], dtype=tf.uint8)
+        images = tf.concat([images, zero_pad], axis=1)
 
         if 'use_cam' in conf:
             images = images[:,conf['use_cam']]
@@ -173,8 +170,6 @@ CONF = {}
 CONF['schedsamp_k'] = -1  # don't feed ground truth
 CONF['skip_frame'] = 1
 CONF['train_val_split']= 0.95
-CONF['sequence_length']= 30  #48      # 'sequence length, including context frames.'
-CONF['batch_size'] = 15
 CONF['visualize'] = False
 CONF['context_frames'] = 2
 CONF['ncam'] = 1

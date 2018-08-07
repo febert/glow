@@ -1,6 +1,7 @@
 import tensorflow as tf
 import tfops as Z
 import horovod.tensorflow as hvd
+import pdb
 
 # Optimizers
 
@@ -157,6 +158,14 @@ def adamax(params, cost_or_grads, alpha=3e-4, hps=None, epsilon=1e-8):
         gs = cost_or_grads
 
     beta2 = 1-1./(hps.train_its*hps.polyak_epochs)
+
+    #TODO: find out why some gradients are none
+    # filtering out None gradients.
+    # new_gs = []
+    # for g in gs:
+    #     if g is not None:
+    #         new_gs.append(g)
+    # gs = new_gs
 
     # all-reduce
     grads = [Z.allreduce_mean(g) for g in gs]

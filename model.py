@@ -15,8 +15,6 @@ f_loss: function with as input the (x,y,reuse=False), and as output a list/tuple
 
 
 
-
-
 def abstract_model_xy(sess, hps, feeds, train_iterator, test_iterator, data_init, lr, f_loss, train=True):
 
     # == Create class with static fields and methods
@@ -25,7 +23,6 @@ def abstract_model_xy(sess, hps, feeds, train_iterator, test_iterator, data_init
     m.sess = sess
     m.feeds = feeds
     m.lr = lr
-
 
     # === Loss and optimizer
     loss_train, stats_train = f_loss(train_iterator, True)
@@ -45,11 +42,13 @@ def abstract_model_xy(sess, hps, feeds, train_iterator, test_iterator, data_init
             all_params, gs, alpha=lr, hps=hps)
 
     if hps.direct_iterator:
-        m.train = lambda _lr: sess.run([train_op, stats_train], {lr: _lr})[1]
+        train_sum_op = tf.summary.scalar('train_loss', loss_train)
+        m.train = lambda _lr: sess.run([train_op, train_sum_op, stats_train], {lr: _lr})[1:]
     else:
         def _train(_lr):
             _x, _y = train_iterator()
-            return sess.run([train_op, stats_train], {feeds['x']: _x,
+            train_sum_op = tf.summary.scalar('train_loss', loss_train)
+            return sess.run([train_op, train_sum_op, stats_train], {feeds['x']: _x,
                                                       feeds['y']: _y, lr: _lr})[1]
         m.train = _train
 
@@ -58,16 +57,17 @@ def abstract_model_xy(sess, hps, feeds, train_iterator, test_iterator, data_init
     # === Testing
     loss_test, stats_test = f_loss(test_iterator, False, reuse=True)
     if hps.direct_iterator:
-        m.test = lambda: sess.run(stats_test)
+        test_sum_op = tf.summary.scalar('test_loss', loss_test)
+        m.test = lambda: sess.run([loss_test, test_sum_op, stats_test])
     else:
         def _test():
             _x, _y = test_iterator()
-            return sess.run(stats_test, {feeds['x']: _x,
+            return sess.run([loss_test, stats_test], {feeds['x']: _x,
                                          feeds['y']: _y})
         m.test = _test
 
     # === Saving and restoring
-    saver = tf.train.Saver()
+    saver = tf.train.Saver(max_to_keep=3)
     if train:
         saver_ema = tf.train.Saver(ema.variables_to_restore())
         m.save_ema = lambda path: saver_ema.save(
@@ -77,13 +77,13 @@ def abstract_model_xy(sess, hps, feeds, train_iterator, test_iterator, data_init
 
     # === Initialize the parameters
     if hps.restore_path != '':
-         
         m.restore(hps.restore_path)
     else:
         with Z.arg_scope([Z.get_variable_ddi, Z.actnorm], init=True):
             results_init = f_loss(None, True, reuse=True)
         sess.run(tf.global_variables_initializer())
         sess.run(results_init, {feeds['x']: data_init['x'],
+                                feeds['cond']: data_init['cond'],
                                 feeds['y']: data_init['y']})
     sess.run(hvd.broadcast_global_variables(0))
 
@@ -92,31 +92,51 @@ def abstract_model_xy(sess, hps, feeds, train_iterator, test_iterator, data_init
 
 def codec(hps):
 
-    def encoder(z, objective):
+    def cond_encoder(cond, hps):
+
+        def split_squeeze(z):
+            n_z = Z.int_shape(z)[3]
+            z1 = z[:, :, :, :n_z // 2]
+            z1 = Z.squeeze2d(z1)
+            return z1
+
+        h = tf.concat(tf.unstack(cond, axis=1), -1)
+
+        cond_all = [h]
+        for i in range(hps.n_levels-1):
+            with tf.variable_scope("cond_enc/level{}".format(i)):
+                h = revnet2d_cond(h, hps)
+                h = split_squeeze(h)
+
+            cond_all.append(h)
+        return cond_all
+
+
+    def encoder(z, cond_all, objective):
         print('building encoder')
         z_all = []
         for i in range(hps.n_levels):
             z_shape = z.get_shape().as_list()
             print('encoder layer {} shape {}, num_dim {}'.format(i, z.get_shape(), z_shape[1]*z_shape[2]*z_shape[3]))
-            z, objective = revnet2d(str(i), z, objective, hps)
+            z, objective = revnet2d(str(i), z, cond_all[i], objective, hps)
             if i < hps.n_levels-1:
                 z, z_all, objective = split2d("pool"+str(i), z, z_all, objective=objective)
         z_all.append(z)
         return z, z_all, objective
 
-    def decoder(z, eps_std, z_all=None):
+    def decoder(z, cond_all, eps_std, z_all=None):
         print('building decoder')
 
         for i in reversed(range(hps.n_levels)):
             z_shape = z.get_shape().as_list()
-            print('encoder layer {} shape {}, num_dim {}'.format(i, z.get_shape(), z_shape[1]*z_shape[2]*z_shape[3]))
+            print('decoder layer {} shape {}, num_dim {}'.format(i, z.get_shape(), z_shape[1]*z_shape[2]*z_shape[3]))
             if i < hps.n_levels-1:
                 z = split2d_reverse("pool"+str(i), z, z_all, eps_std=eps_std)
-            z, _ = revnet2d(str(i), z, 0, hps, reverse=True)
+            z, _ = revnet2d(str(i), z, cond_all[i], 0, hps, reverse=True)
 
         return z
 
-    return encoder, decoder
+    return encoder, cond_encoder, decoder
 
 
 def prior(name, y_onehot, hps):
@@ -150,14 +170,15 @@ def prior(name, y_onehot, hps):
 
 def model(sess, hps, train_iterator, test_iterator, data_init, train=True):
 
+    ncontxt = 2
     # Only for decoding/init, rest use iterators directly
     with tf.name_scope('input'):
-        X = tf.placeholder(
-            tf.uint8, [None, hps.image_size, hps.image_size, 3], name='image')
+        X = tf.placeholder(tf.uint8, [None,  hps.image_size, hps.image_size, 3], name='image')
+        Cond = tf.placeholder(tf.uint8, [None, ncontxt, hps.image_size, hps.image_size, 3], name='cond')
         Y = tf.placeholder(tf.int32, [None], name='label')
         lr = tf.placeholder(tf.float32, None, name='learning_rate')
 
-    encoder, decoder = codec(hps)
+    encoder, cond_encoder, decoder = codec(hps)
     hps.n_bins = 2. ** hps.n_bits_x
 
     def preprocess(x):
@@ -170,7 +191,7 @@ def model(sess, hps, train_iterator, test_iterator, data_init, train=True):
     def postprocess(x):
         return tf.cast(tf.clip_by_value(tf.floor((x + .5)*hps.n_bins)*(256./hps.n_bins), 0, 255), 'uint8')
 
-    def _f_loss(x, y, is_training, reuse=False):
+    def _f_loss(x, cond, y, is_training, reuse=False):
 
         with tf.variable_scope('model', reuse=reuse):
             y_onehot = tf.cast(tf.one_hot(y, hps.n_y, 1, 0), 'float32')
@@ -178,17 +199,17 @@ def model(sess, hps, train_iterator, test_iterator, data_init, train=True):
             objective = tf.zeros_like(x, dtype='float32')[:, 0, 0, 0]
 
             z = preprocess(x)
+            cond = preprocess(cond)
             z = z + tf.random_uniform(tf.shape(z), 0, 1./hps.n_bins)
 
             objective += - np.log(hps.n_bins) * np.prod(Z.int_shape(z)[1:])
 
             # Encode
             z = Z.squeeze2d(z, 2)  # > 16x16x12
+            cond = Z.squeeze2d(cond, 2)  # > 16x16x12
+            cond_all = cond_encoder(cond, hps)
 
-             
-            z, z_all, objective = encoder(z, objective)
-
-             
+            z, z_all, objective = encoder(z, cond_all, objective)
 
             hps.top_shape = Z.int_shape(z)[1:]
 
@@ -222,14 +243,19 @@ def model(sess, hps, train_iterator, test_iterator, data_init, train=True):
         return bits_x, bits_y, classification_error
 
     # === Sampling function
-    def f_decode(y, eps_std):
+    def f_decode(y, cond, eps_std):
         y_onehot = tf.cast(tf.one_hot(y, hps.n_y, 1, 0), 'float32')
         with tf.variable_scope('model', reuse=True):
 
             _, sample = prior("prior", y_onehot, hps)
             z = sample(eps_std)
 
-            z = decoder(z, eps_std)
+            cond = preprocess(cond)
+            cond = Z.squeeze2d(cond, 2)  # > 16x16x12
+
+            cond_all = cond_encoder(cond, hps)
+
+            z = decoder(z, cond_all, eps_std)
 
             z = Z.unsqueeze2d(z, 2)  # 8x8x12 -> 16x16x3
 
@@ -239,11 +265,16 @@ def model(sess, hps, train_iterator, test_iterator, data_init, train=True):
 
     def f_loss(iterator, is_training, reuse=False):
         if hps.direct_iterator and iterator is not None:
-            x, y = iterator.get_next()
-        else:
-            x, y = X, Y
+            traj, y = iterator.get_next()
 
-        bits_x, bits_y, pred_loss = _f_loss(x, y, is_training, reuse)
+            start_ind = tf.random_uniform((),0, hps.seq_len-ncontxt, dtype=tf.int32)
+            x = traj[:, start_ind + ncontxt]
+            cond = traj[:, start_ind:start_ind+ncontxt]
+            cond = tf.reshape(cond, [-1, ncontxt, x.get_shape()[1], x.get_shape()[2], 3])
+        else:
+            x, cond, y = X, Cond, Y
+
+        bits_x, bits_y, pred_loss = _f_loss(x, cond, y, is_training, reuse)
 
         local_loss = bits_x + hps.weight_y * bits_y
 
@@ -273,29 +304,45 @@ def model(sess, hps, train_iterator, test_iterator, data_init, train=True):
         return z_all
 
 
-    def build_exmp_decoder(z_all):
+    def build_exmp_decoder(z_all, cond):
         """
         Decode (possibly interpolated) latent into image
         """
         with tf.variable_scope('model', reuse=True):
             z_start = z_all.pop(-1)
-            z = decoder(z_start, z_all=z_all, eps_std=0)
+            cond = Z.squeeze2d(cond, 2)  # > 16x16x12
+            cond_all = cond_encoder(cond)
+            z = decoder(z_start, cond_all, z_all=z_all, eps_std=0)
             z = Z.unsqueeze2d(z, 2)
             x = postprocess(z)
         return x
 
 
-    feeds = {'x': X, 'y': Y}
+    feeds = {'x': X, 'cond':Cond, 'y': Y}
     m = abstract_model_xy(sess, hps, feeds, train_iterator,
                           test_iterator, data_init, lr, f_loss, train=train)
 
     # === Decoding functions
     m.eps_std = tf.placeholder(tf.float32, [None], name='eps_std')
-    x_sampled = f_decode(Y, m.eps_std)
+    m.train_cond = tf.placeholder(tf.int64, (), 'traincond')
+    train_test_data = tf.cond(m.train_cond > 0,
+                   # if 1 use trainigbatch else validation batch
+                   train_iterator.get_next,
+                   test_iterator.get_next)[0]
+    #pick the first timestep
+    train_test_data = train_test_data[:, :ncontxt]
+
+
+    x_sampled = f_decode(Y, train_test_data, m.eps_std)
 
     def m_decode(_y, _eps_std):
         return m.sess.run(x_sampled, {Y: _y, m.eps_std: _eps_std})
     m.decode = m_decode
+
+    m.x_sampled = x_sampled
+    m.x_sampled_grid_train = get_grid(x_sampled, 1, hps)
+    m.x_sampled_grid_test = get_grid(x_sampled, 0, hps)
+    m.Y = Y
 
     m.build_exmp_encoder = build_exmp_encoder
     m.build_exmp_decoder = build_exmp_decoder
@@ -303,38 +350,88 @@ def model(sess, hps, train_iterator, test_iterator, data_init, train=True):
 
     return m
 
+def get_grid(x_sampled, traincond, hps):
+    im_height, im_width = x_sampled.get_shape().as_list()[1:3]
 
-def checkpoint(z, logdet):
+    if traincond == 1:
+        bsize = hps.local_batch_train
+        suf = 'train'
+    else:
+        bsize = hps.local_batch_test
+        suf = 'test'
+
+    width = int(np.floor(np.sqrt(bsize)))  # result width
+    height = int(bsize / width)  # result height
+
+    x_sampled = tf.reshape(x_sampled, [bsize, im_height, im_width, 3])
+    x_sampled = tf.unstack(x_sampled, axis=0)
+    rows = []
+    for r in range(height):
+        rows.append(tf.concat(x_sampled[r * width:(r + 1) * width], axis=1))
+    image = tf.concat(rows, axis=0)[None]
+
+    temperatures = [0., .25, .5, .6, .7, .8, .9, 1.]
+    summaries = [tf.summary.image('temp{}_{}'.format(eps, suf), image) for eps in temperatures]
+    return temperatures, summaries
+
+
+def checkpoint(z, cond, logdet):
     zshape = Z.int_shape(z)
-    z = tf.reshape(z, [-1, zshape[1]*zshape[2]*zshape[3]])
+    num_zvals = zshape[1]*zshape[2]*zshape[3]
+    z = tf.reshape(z, [-1, num_zvals])
+
+    condshape = Z.int_shape(cond)
+    num_condvals = condshape[1]*condshape[2]*condshape[3]
+    cond = tf.reshape(cond, [-1, num_condvals])
+
     logdet = tf.reshape(logdet, [-1, 1])
-    combined = tf.concat([z, logdet], axis=1)
+    combined = tf.concat([z, cond, logdet], axis=1)
     tf.add_to_collection('checkpoints', combined)
-    logdet = combined[:, -1]
-    z = tf.reshape(combined[:, :-1], [-1, zshape[1], zshape[2], zshape[3]])
-    return z, logdet
+    logdet = combined[:, -1]    # why don't we take the original z, cond and logdet here????
+    z = tf.reshape(combined[:, :num_zvals], [-1, zshape[1], zshape[2], zshape[3]])
+    cond = tf.reshape(combined[:, num_zvals:num_zvals + num_condvals], [-1, condshape[1], condshape[2], condshape[3]])
+    return z, cond, logdet
+
+
+def checkpoint_cond(cond):
+    condshape = Z.int_shape(cond)
+    num_condvals = condshape[1]*condshape[2]*condshape[3]
+    cond = tf.reshape(cond, [-1, num_condvals])
+    tf.add_to_collection('checkpoints', cond)
+    cond = tf.reshape(cond, [-1, condshape[1], condshape[2], condshape[3]])
+    return cond
 
 
 @add_arg_scope
-def revnet2d(name, z, logdet, hps, reverse=False):
+def revnet2d(name, z, cond, logdet, hps, reverse=False):
     with tf.variable_scope(name):
         if not reverse:
             for i in range(hps.depth):
-                # print('enc building depth {}'.format(i))
-                z, logdet = checkpoint(z, logdet)
-                z, logdet = revnet2d_step(str(i), z, logdet, hps, reverse)
-            z, logdet = checkpoint(z, logdet)
+                z, cond, logdet = checkpoint(z, cond, logdet)   #TODO: add caching for cond!
+                z, logdet = revnet2d_step(str(i), z, cond, logdet, hps, reverse)
+            z, cond, logdet = checkpoint(z, cond, logdet)
         else:
             for i in reversed(range(hps.depth)):
-                # print('dec building depth {}'.format(i))
-                z, logdet = revnet2d_step(str(i), z, logdet, hps, reverse)
+                z, logdet = revnet2d_step(str(i), z, cond, logdet, hps, reverse)
     return z, logdet
+
+
+def revnet2d_cond(h, hps):
+    for d in range(hps.depth):
+        with tf.variable_scope("d{}".format(d)):
+            n_out = int(h.get_shape()[3])
+            width = hps.width
+            h = tf.nn.relu(Z.conv2d("l_1", h, width))
+            h = tf.nn.relu(Z.conv2d("l_2", h, width, filter_size=[1, 1]))
+            h = Z.conv2d_zeros("l_last", h, n_out)
+        h = checkpoint_cond(h)
+    return h
 
 # Simpler, new version
 
 
 @add_arg_scope
-def revnet2d_step(name, z, logdet, hps, reverse):
+def revnet2d_step(name, z, cond, logdet, hps, reverse):
     with tf.variable_scope(name):
 
         shape = Z.int_shape(z)
@@ -358,9 +455,9 @@ def revnet2d_step(name, z, logdet, hps, reverse):
             z2 = z[:, :, :, n_z // 2:]
 
             if hps.flow_coupling == 0:
-                z2 += f("f1", z1, hps.width)
+                z2 += f("f1", z1, cond, hps.width)
             elif hps.flow_coupling == 1:
-                h = f("f1", z1, hps.width, n_z)
+                h = f("f1", z1, cond, hps.width, n_z)
                 shift = h[:, :, :, 0::2]
                 #scale = tf.exp(h[:, :, :, 1::2])
                 scale = tf.nn.sigmoid(h[:, :, :, 1::2] + 2.)
@@ -378,9 +475,9 @@ def revnet2d_step(name, z, logdet, hps, reverse):
             z2 = z[:, :, :, n_z // 2:]
 
             if hps.flow_coupling == 0:
-                z2 -= f("f1", z1, hps.width)
+                z2 -= f("f1", z1, cond, hps.width)
             elif hps.flow_coupling == 1:
-                h = f("f1", z1, hps.width, n_z)
+                h = f("f1", z1, cond, hps.width, n_z)
                 shift = h[:, :, :, 0::2]
                 #scale = tf.exp(h[:, :, :, 1::2])
                 scale = tf.nn.sigmoid(h[:, :, :, 1::2] + 2.)
@@ -407,7 +504,8 @@ def revnet2d_step(name, z, logdet, hps, reverse):
     return z, logdet
 
 
-def f(name, h, width, n_out=None):
+def f(name, h, cond, width, n_out=None):
+    h = tf.concat([h, cond], axis=3)
     n_out = n_out or int(h.get_shape()[3])
     with tf.variable_scope(name):
         h = tf.nn.relu(Z.conv2d("l_1", h, width))
@@ -542,9 +640,12 @@ def split2d(name, z, z_all=None, objective=0.):
         z2 = z[:, :, :, n_z // 2:]
         pz = split2d_prior(z1)
         objective += pz.logp(z2)
-        z_all.append(z2)
         z1 = Z.squeeze2d(z1)
-        return z1, z_all, objective
+        if z_all is not None:
+            z_all.append(z2)
+            return z1, z_all, objective
+        else:
+            return z1, objective
 
 
 @add_arg_scope

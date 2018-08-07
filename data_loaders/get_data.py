@@ -77,11 +77,12 @@ def make_batch(sess, itr, itr_batch_size, required_batch_size):
     ib, rb = itr_batch_size, required_batch_size
     #assert rb % ib == 0
     k = int(np.ceil(rb / ib))
-    xs, ys = [], []
+    xs, cond, ys = [], [], []
     data = itr.get_next()
     for i in range(k):
-        x, y = sess.run(data)
-        xs.append(x)
+        traj, y = sess.run(data)
+        xs.append(traj[:,2])
+        cond.append(traj[:,:2],)
         ys.append(y)
-    x, y = np.concatenate(xs)[:rb], np.concatenate(ys)[:rb]
-    return {'x': x, 'y': y}
+    x, cond, y = np.concatenate(xs)[:rb], np.concatenate(cond)[:rb], np.concatenate(ys)[:rb]
+    return {'x': x, 'cond': cond, 'y': y}

@@ -6,7 +6,7 @@ import os
 import sys
 import time
 from data_loaders.read_tf_records2 import build_tfrecord_single
-from data_loaders.read_tf_records2 import CONF as CARTGRIPPER_CONF
+from data_loaders.read_tf_records2 import CONF
 import matplotlib.pyplot as plt
 
 import horovod.tensorflow as hvd
@@ -24,59 +24,80 @@ learn = tf.contrib.learn
 # Surpress verbose warnings
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
+summ_interval = 10 #episodes
+
 
 def _print(*args, **kwargs):
     if hvd.rank() == 0:
         print(*args, **kwargs)
 
+# def init_visualizations(hps, model, logdir):
+#
+#     def decode_batch(y, eps):
+#         n_batch = hps.local_batch_train
+#         xs = []
+#         for i in range(int(np.ceil(len(eps) / n_batch))):
+#             xs.append(model.decode(
+#                 y[i*n_batch:i*n_batch + n_batch], eps[i*n_batch:i*n_batch + n_batch]))
+#         return np.concatenate(xs)
+#
+#     def draw_samples(epoch):
+#         if hvd.rank() != 0:
+#             return
+#
+#         rows = 10 if hps.image_size <= 64 else 4
+#         cols = rows
+#         n_batch = rows*cols
+#         y = np.asarray([_y % hps.n_y for _y in (
+#             list(range(cols)) * rows)], dtype='int32')
+#
+#         # temperatures = [0., .25, .5, .626, .75, .875, 1.] #previously
+#         temperatures = [0., .25, .5, .6, .7, .8, .9, 1.]
+#
+#         x_samples = []
+#         x_samples.append(decode_batch(y, [.0]*n_batch))
+#         x_samples.append(decode_batch(y, [.25]*n_batch))
+#         x_samples.append(decode_batch(y, [.5]*n_batch))
+#         x_samples.append(decode_batch(y, [.6]*n_batch))
+#         x_samples.append(decode_batch(y, [.7]*n_batch))
+#         x_samples.append(decode_batch(y, [.8]*n_batch))
+#         x_samples.append(decode_batch(y, [.9] * n_batch))
+#         x_samples.append(decode_batch(y, [1.]*n_batch))
+#         # previously: 0, .25, .5, .625, .75, .875, 1.
+#
+#         for i in range(len(x_samples)):
+#             x_sample = np.reshape(
+#                 x_samples[i], (n_batch, hps.image_size, hps.image_size, 3))
+#             graphics.save_raster(x_sample, logdir +
+#                                  'epoch_{}_sample_{}.png'.format(epoch, i))
+#
+#     return draw_samples
 
-def init_visualizations(hps, model, logdir):
 
-    def decode_batch(y, eps):
-        n_batch = hps.local_batch_train
-        xs = []
-        for i in range(int(np.ceil(len(eps) / n_batch))):
-            xs.append(model.decode(
-                y[i*n_batch:i*n_batch + n_batch], eps[i*n_batch:i*n_batch + n_batch]))
-        return np.concatenate(xs)
+def sample_images(eps, sess, model, summary_writer, itr, bsize, sum_op, mode):
 
-    def draw_samples(epoch):
-        if hvd.rank() != 0:
-            return
+    y = np.zeros(bsize, dtype='int32')
+    feed_dict = {model.Y: y,
+                 model.eps_std: np.ones(bsize)*eps,
+                 model.train_cond: mode}
 
-        rows = 10 if hps.image_size <= 64 else 4
-        cols = rows
-        n_batch = rows*cols
-        y = np.asarray([_y % hps.n_y for _y in (
-            list(range(cols)) * rows)], dtype='int32')
+    [summary_str] = sess.run([sum_op],  feed_dict)
+    summary_writer.add_summary(summary_str, itr)
 
-        # temperatures = [0., .25, .5, .626, .75, .875, 1.] #previously
-        temperatures = [0., .25, .5, .6, .7, .8, .9, 1.]
+def draw_samples(sess, hps, model, summary_writer, itr, mode):
+    if mode == 1:
+        sum_temp = model.x_sampled_grid_train
+        bsize = hps.local_batch_train
+    else:
+        sum_temp = model.x_sampled_grid_test
+        bsize = hps.local_batch_test
 
-        x_samples = []
-        x_samples.append(decode_batch(y, [.0]*n_batch))
-        x_samples.append(decode_batch(y, [.25]*n_batch))
-        x_samples.append(decode_batch(y, [.5]*n_batch))
-        x_samples.append(decode_batch(y, [.6]*n_batch))
-        x_samples.append(decode_batch(y, [.7]*n_batch))
-        x_samples.append(decode_batch(y, [.8]*n_batch))
-        x_samples.append(decode_batch(y, [.9] * n_batch))
-        x_samples.append(decode_batch(y, [1.]*n_batch))
-        # previously: 0, .25, .5, .625, .75, .875, 1.
-
-        for i in range(len(x_samples)):
-            x_sample = np.reshape(
-                x_samples[i], (n_batch, hps.image_size, hps.image_size, 3))
-            graphics.save_raster(x_sample, logdir +
-                                 'epoch_{}_sample_{}.png'.format(epoch, i))
-
-    return draw_samples
+    for eps, sum in zip(*sum_temp):
+        sample_images(eps, sess, model, summary_writer, itr, bsize, sum, mode)
 
 # ===
 # Code for getting data
 # ===
-
-
 def get_data(hps, sess):
     if hps.image_size == -1:
         hps.image_size = {'mnist': 32, 'cifar10': 32, 'imagenet-oord': 64,
@@ -126,21 +147,21 @@ def get_data(hps, sess):
 
     elif hps.problem == 'cartgripper':
         hps.direct_iterator = True
-        CARTGRIPPER_CONF['data_dir'] = hps.data_dir
+        CONF['data_dir'] = hps.data_dir
         if 'weiss_gripper_20k' in hps.data_dir:
-            CARTGRIPPER_CONF['sdim'] = 4
-            CARTGRIPPER_CONF['adim'] = 5
-            CARTGRIPPER_CONF['orig_size'] = [64, 64]
+            CONF['sdim'] = 4
+            CONF['adim'] = 5
+            CONF['orig_size'] = [64, 64]
         elif 'autograsp_bowls' in hps.data_dir:
-            CARTGRIPPER_CONF['sdim'] = 5
-            CARTGRIPPER_CONF['adim'] = 4
-            CARTGRIPPER_CONF['orig_size'] = [48, 64]
+            CONF['sdim'] = 5
+            CONF['adim'] = 4
+            CONF['orig_size'] = [48, 64]
+        CONF['sequence_length'] = hps.seq_len
 
-        CARTGRIPPER_CONF['batch_size'] = hps.local_batch_train
-        train_iterator = build_tfrecord_single(CARTGRIPPER_CONF, 'train')
-
-        CARTGRIPPER_CONF['batch_size'] = hps.local_batch_test
-        test_iterator = build_tfrecord_single(CARTGRIPPER_CONF, 'train')
+        CONF['batch_size'] = hps.local_batch_train
+        train_iterator = build_tfrecord_single(CONF, 'train')
+        CONF['batch_size'] = hps.local_batch_test
+        test_iterator = build_tfrecord_single(CONF, 'train')
 
         data_init = make_batch(sess, train_iterator, hps.local_batch_train, hps.local_batch_init)
 
@@ -187,8 +208,7 @@ def main(hps):
     import model
     model = model.model(sess, hps, train_iterator, test_iterator, data_init)
 
-    # Initialize visualization functions
-    draw_samples = init_visualizations(hps, model, logdir)
+    summary_writer = tf.summary.FileWriter(hps.logdir, graph=sess.graph, flush_secs=10)
 
     _print(hps)
     _print('Starting training. Logging to', logdir)
@@ -205,33 +225,30 @@ def main(hps):
         train_logger = ResultLogger(logdir + "train.txt", **hps.__dict__)
         test_logger = ResultLogger(logdir + "test.txt", **hps.__dict__)
 
-
     print('saving initial weights')
     model.save(logdir+"model_initial_weights.ckpt")
 
     tcurr = time.time()
-    for epoch in range(1, hps.epochs):
+    for epoch in range(0, hps.epochs):
         t = time.time()
-        train_results = []
+
+        if epoch % summ_interval == 0:
+            draw_samples(sess, hps, model, summary_writer, epoch, mode=1)
+            draw_samples(sess, hps, model, summary_writer, epoch, mode=0)
 
         print('starting epoch: ', epoch)
         for it in range(hps.train_its):
-
             # Set learning rate, linearly annealed from 0 in the first hps.epochs_warmup epochs.
             lr = hps.lr * min(1., n_processed /
                               (hps.n_train * hps.epochs_warmup))
 
             # Run a training step synchronously.
             _t = time.time()
-            train_results += [model.train(lr)]
+            sum_str, stats = model.train(lr)
+            summary_writer.add_summary(sum_str, it + epoch*hps.train_its)
 
             if it % 100 == 0:
-                print('itr {} starting epoch {}, results [local_loss, bits_x, bits_y, pred_loss]: {}'.format(it, epoch, train_results[-1]))
-
-            # print(train_results)
-            # if hps.verbose and hvd.rank() == 0:
-            #     _print(n_processed, time.time()-_t, train_results[-1])
-            #     sys.stdout.flush()
+                print('itr {} starting epoch {}, results [local_loss, bits_x, bits_y, pred_loss]: {}'.format(it, epoch, stats))
 
             # Images seen wrt anchor resolution
             n_processed += hvd.size() * hps.n_batch_train
@@ -239,54 +256,21 @@ def main(hps):
             n_images += hvd.size() * hps.local_batch_train
 
 
-        train_results = np.mean(np.asarray(train_results), axis=0)
-
         dtrain = time.time() - t
-        ips = (hps.train_its * hvd.size() * hps.local_batch_train) / dtrain
         train_time += dtrain
 
-        if hvd.rank() == 0:
-            train_logger.log(epoch=epoch, n_processed=n_processed, n_images=n_images, train_time=int(
-                train_time), **process_results(train_results))
-
-
-        if epoch < 10 or (epoch < 50 and epoch % 10 == 0) or epoch % hps.epochs_full_valid == 0:
-            test_results = []
-            msg = ''
+        if epoch % hps.epochs_full_valid == 0:
 
             t = time.time()
             # model.polyak_swap()
 
-            if epoch % hps.epochs_full_valid == 0:
-                # Full validation run
-                for it in range(hps.full_test_its):
-                    test_results += [model.test()]
-                test_results = np.mean(np.asarray(test_results), axis=0)
+            # Full validation run
+            test_loss, sum_str, _ = model.test()
+            summary_writer.add_summary(sum_str, epoch)
 
-                if hvd.rank() == 0:
-                    test_logger.log(epoch=epoch, n_processed=n_processed,
-                                    n_images=n_images, **process_results(test_results))
-
-                    # Save checkpoint
-                    if test_results[0] < test_loss_best:
-                        test_loss_best = test_results[0]
-                        model.save(logdir+"model_best_loss.ckpt")
-                        msg += ' *'
-
-            dtest = time.time() - t
-
-            # Sample
-            t = time.time()
-            if epoch == 1 or epoch == 10 or epoch % hps.epochs_full_sample == 0:
-                draw_samples(epoch)
-            dsample = time.time() - t
-
-            if hvd.rank() == 0:
-                dcurr = time.time() - tcurr
-                tcurr = time.time()
-                _print(epoch, n_processed, n_images, "{:.1f} {:.1f} {:.1f} {:.1f} {:.1f}".format(
-                    ips, dtrain, dtest, dsample, dcurr), train_results, test_results, msg)
-
+        if epoch % hps.save_interval == 0:
+            # Save checkpoint
+            model.save(logdir + "/model_epoch{}.ckpt".format(epoch))
 
     if hvd.rank() == 0:
         _print("Finished!")
@@ -349,6 +333,8 @@ if __name__ == "__main__":
                         help="Location of data")
     parser.add_argument("--dal", type=int, default=1,
                         help="Data augmentation level: 0=None, 1=Standard, 2=Extra")
+    parser.add_argument("--seq_len", type=int, default=30,
+                        help="length of videosequnces to load")
 
     # New dataloader params
     parser.add_argument("--fmap", type=int, default=1,
@@ -382,6 +368,8 @@ if __name__ == "__main__":
                         default=10, help="Warmup epochs")
     parser.add_argument("--epochs_full_valid", type=int,
                         default=50, help="Epochs between valid")
+    parser.add_argument("--save_interval", type=int,
+                        default=50, help="Epochs between save")
     parser.add_argument("--gradient_checkpointing", type=int,
                         default=1, help="Use memory saving gradients")
 
@@ -400,6 +388,8 @@ if __name__ == "__main__":
                         help="Number of bits of x")
     parser.add_argument("--n_levels", type=int, default=3,
                         help="Number of levels")
+    parser.add_argument("--cond", type=str,
+                        default=1, help="conditional model")
 
     # Synthesis/Sampling hyperparameters:
     parser.add_argument("--n_sample", type=int, default=1,
