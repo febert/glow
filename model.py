@@ -25,7 +25,7 @@ def abstract_model_xy(sess, hps, feeds, train_iterator, test_iterator, data_init
     m.lr = lr
 
     # === Loss and optimizer
-    loss_train, stats_train = f_loss(train_iterator, True)
+    loss_train, stats_train = f_loss(train_iterator)
     all_params = tf.trainable_variables()
 
     if train:
@@ -55,7 +55,7 @@ def abstract_model_xy(sess, hps, feeds, train_iterator, test_iterator, data_init
     m.polyak_swap = lambda: sess.run(polyak_swap_op)
 
     # === Testing
-    loss_test, stats_test = f_loss(test_iterator, False, reuse=True)
+    loss_test, stats_test = f_loss(test_iterator, reuse=True)
     if hps.direct_iterator:
         test_sum_op = tf.summary.scalar('test_loss', loss_test)
         m.test = lambda: sess.run([loss_test, test_sum_op, stats_test])
@@ -80,7 +80,7 @@ def abstract_model_xy(sess, hps, feeds, train_iterator, test_iterator, data_init
         m.restore(hps.restore_path)
     else:
         with Z.arg_scope([Z.get_variable_ddi, Z.actnorm], init=True):
-            results_init = f_loss(None, True, reuse=True)
+            results_init = f_loss(None, reuse=True)
         sess.run(tf.global_variables_initializer())
         sess.run(results_init, {feeds['x']: data_init['x'],
                                 feeds['cond']: data_init['cond'],
@@ -93,7 +93,6 @@ def abstract_model_xy(sess, hps, feeds, train_iterator, test_iterator, data_init
 def codec(hps):
 
     def cond_encoder(cond, hps):
-
         def split_squeeze(z):
             n_z = Z.int_shape(z)[3]
             z1 = z[:, :, :, :n_z // 2]
@@ -111,14 +110,17 @@ def codec(hps):
             cond_all.append(h)
         return cond_all
 
-
     def encoder(z, cond_all, objective):
         print('building encoder')
         z_all = []
         for i in range(hps.n_levels):
             z_shape = z.get_shape().as_list()
             print('encoder layer {} shape {}, num_dim {}'.format(i, z.get_shape(), z_shape[1]*z_shape[2]*z_shape[3]))
-            z, objective = revnet2d(str(i), z, cond_all[i], objective, hps)
+            if cond_all is None:
+                z, objective = revnet2d(str(i), z, objective, hps)
+            else:
+                z, objective = revnet2d(str(i), z, objective, hps, cond=cond_all[i])
+
             if i < hps.n_levels-1:
                 z, z_all, objective = split2d("pool"+str(i), z, z_all, objective=objective)
         z_all.append(z)
@@ -132,7 +134,10 @@ def codec(hps):
             print('decoder layer {} shape {}, num_dim {}'.format(i, z.get_shape(), z_shape[1]*z_shape[2]*z_shape[3]))
             if i < hps.n_levels-1:
                 z = split2d_reverse("pool"+str(i), z, z_all, eps_std=eps_std)
-            z, _ = revnet2d(str(i), z, cond_all[i], 0, hps, reverse=True)
+            if cond_all is not None:
+                z, _ = revnet2d(str(i), z, 0, hps, reverse=True, cond_all=cond_all[i])
+            else:
+                z, _ = revnet2d(str(i), z, 0, hps, reverse=True)
 
         return z
 
@@ -191,7 +196,8 @@ def model(sess, hps, train_iterator, test_iterator, data_init, train=True):
     def postprocess(x):
         return tf.cast(tf.clip_by_value(tf.floor((x + .5)*hps.n_bins)*(256./hps.n_bins), 0, 255), 'uint8')
 
-    def _f_loss(x, cond, y, is_training, reuse=False):
+    def _f_loss(x, y, reuse=False, cond=None):
+
 
         with tf.variable_scope('model', reuse=reuse):
             y_onehot = tf.cast(tf.one_hot(y, hps.n_y, 1, 0), 'float32')
@@ -199,15 +205,19 @@ def model(sess, hps, train_iterator, test_iterator, data_init, train=True):
             objective = tf.zeros_like(x, dtype='float32')[:, 0, 0, 0]
 
             z = preprocess(x)
-            cond = preprocess(cond)
             z = z + tf.random_uniform(tf.shape(z), 0, 1./hps.n_bins)
 
             objective += - np.log(hps.n_bins) * np.prod(Z.int_shape(z)[1:])
 
             # Encode
             z = Z.squeeze2d(z, 2)  # > 16x16x12
-            cond = Z.squeeze2d(cond, 2)  # > 16x16x12
-            cond_all = cond_encoder(cond, hps)
+
+            if cond is not None:
+                cond = preprocess(cond)
+                cond = Z.squeeze2d(cond, 2)  # > 16x16x12
+                cond_all = cond_encoder(cond, hps)
+            else:
+                cond_all = None
 
             z, z_all, objective = encoder(z, cond_all, objective)
 
@@ -250,31 +260,36 @@ def model(sess, hps, train_iterator, test_iterator, data_init, train=True):
             _, sample = prior("prior", y_onehot, hps)
             z = sample(eps_std)
 
-            cond = preprocess(cond)
-            cond = Z.squeeze2d(cond, 2)  # > 16x16x12
-
-            cond_all = cond_encoder(cond, hps)
+            if cond is not None:
+                cond = preprocess(cond)
+                cond = Z.squeeze2d(cond, 2)  # > 16x16x12
+                cond_all = cond_encoder(cond, hps)
+            else:
+                cond_all = None
 
             z = decoder(z, cond_all, eps_std)
-
             z = Z.unsqueeze2d(z, 2)  # 8x8x12 -> 16x16x3
-
             x = postprocess(z)
-
         return x
 
-    def f_loss(iterator, is_training, reuse=False):
+    def f_loss(iterator, reuse=False):
         if hps.direct_iterator and iterator is not None:
             traj, y = iterator.get_next()
 
             start_ind = tf.random_uniform((),0, hps.seq_len-ncontxt, dtype=tf.int32)
             x = traj[:, start_ind + ncontxt]
-            cond = traj[:, start_ind:start_ind+ncontxt]
-            cond = tf.reshape(cond, [-1, ncontxt, x.get_shape()[1], x.get_shape()[2], 3])
+            if hps.cond == 1:
+                cond = traj[:, start_ind:start_ind+ncontxt]
+                cond = tf.reshape(cond, [-1, ncontxt, x.get_shape()[1], x.get_shape()[2], 3])
+            else:
+                cond = None
         else:
-            x, cond, y = X, Cond, Y
+            if hps.cond == 1:
+                x, cond, y = X, Cond, Y
+            else:
+                x, cond, y = X, None, Y
 
-        bits_x, bits_y, pred_loss = _f_loss(x, cond, y, is_training, reuse)
+        bits_x, bits_y, pred_loss = _f_loss(x, y, reuse, cond)
 
         local_loss = bits_x + hps.weight_y * bits_y
 
@@ -324,18 +339,19 @@ def model(sess, hps, train_iterator, test_iterator, data_init, train=True):
 
     # === Decoding functions
     m.eps_std = tf.placeholder(tf.float32, [None], name='eps_std')
-    # m.train_cond = tf.placeholder(tf.int64, (), 'traincond')
-    # train_test_data = tf.cond(m.train_cond > 0,
-    #                # if 1 use trainigbatch else validation batch
-    #                train_iterator.get_next,
-    #                test_iterator.get_next)[0]
-    train_test_data = train_iterator.get_next()[0]
+    m.train_cond = tf.placeholder(tf.int64, (), 'traincond')
 
-    #pick the first timestep
-    train_test_data = train_test_data[:, :ncontxt]
+    if hps.cond == 1:
+        cond_data = tf.cond(m.train_cond > 0,
+                       # if 1 use trainigbatch else validation batch
+                       train_iterator.get_next,
+                       test_iterator.get_next)[0]
+        #pick the first timestep
+        cond_data = cond_data[:, :ncontxt]
+    else:
+        cond_data = None
 
-
-    x_sampled = f_decode(Y, train_test_data, m.eps_std)
+    x_sampled = f_decode(Y, cond_data, m.eps_std)
 
     def m_decode(_y, _eps_std):
         return m.sess.run(x_sampled, {Y: _y, m.eps_std: _eps_std})
@@ -382,16 +398,22 @@ def checkpoint(z, cond, logdet):
     num_zvals = zshape[1]*zshape[2]*zshape[3]
     z = tf.reshape(z, [-1, num_zvals])
 
-    condshape = Z.int_shape(cond)
-    num_condvals = condshape[1]*condshape[2]*condshape[3]
-    cond = tf.reshape(cond, [-1, num_condvals])
-
     logdet = tf.reshape(logdet, [-1, 1])
-    combined = tf.concat([z, cond, logdet], axis=1)
-    tf.add_to_collection('checkpoints', combined)
-    logdet = combined[:, -1]    # why don't we take the original z, cond and logdet here????
-    z = tf.reshape(combined[:, :num_zvals], [-1, zshape[1], zshape[2], zshape[3]])
-    cond = tf.reshape(combined[:, num_zvals:num_zvals + num_condvals], [-1, condshape[1], condshape[2], condshape[3]])
+    if cond is not None:
+        condshape = Z.int_shape(cond)
+        num_condvals = condshape[1]*condshape[2]*condshape[3]
+        cond = tf.reshape(cond, [-1, num_condvals])
+
+        combined = tf.concat([z, cond, logdet], axis=1)
+        tf.add_to_collection('checkpoints', combined)
+        logdet = combined[:, -1]    # why don't we take the original z, cond and logdet here????
+        z = tf.reshape(combined[:, :num_zvals], [-1, zshape[1], zshape[2], zshape[3]])
+        cond = tf.reshape(combined[:, num_zvals:num_zvals + num_condvals], [-1, condshape[1], condshape[2], condshape[3]])
+    else:
+        combined = tf.concat([z, logdet], axis=1)
+        tf.add_to_collection('checkpoints', combined)
+        logdet = combined[:, -1]    # why don't we take the original z, cond and logdet here????
+        z = tf.reshape(combined[:, :num_zvals], [-1, zshape[1], zshape[2], zshape[3]])
     return z, cond, logdet
 
 
@@ -405,7 +427,7 @@ def checkpoint_cond(cond):
 
 
 @add_arg_scope
-def revnet2d(name, z, cond, logdet, hps, reverse=False):
+def revnet2d(name, z, logdet, hps, reverse=False, cond=None):
     with tf.variable_scope(name):
         if not reverse:
             for i in range(hps.depth):
@@ -507,7 +529,8 @@ def revnet2d_step(name, z, cond, logdet, hps, reverse):
 
 
 def f(name, h, cond, width, n_out=None):
-    h = tf.concat([h, cond], axis=3)
+    if cond is not None:
+        h = tf.concat([h, cond], axis=3)
     n_out = n_out or int(h.get_shape()[3])
     with tf.variable_scope(name):
         h = tf.nn.relu(Z.conv2d("l_1", h, width))

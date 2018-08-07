@@ -31,55 +31,12 @@ def _print(*args, **kwargs):
     if hvd.rank() == 0:
         print(*args, **kwargs)
 
-# def init_visualizations(hps, model, logdir):
-#
-#     def decode_batch(y, eps):
-#         n_batch = hps.local_batch_train
-#         xs = []
-#         for i in range(int(np.ceil(len(eps) / n_batch))):
-#             xs.append(model.decode(
-#                 y[i*n_batch:i*n_batch + n_batch], eps[i*n_batch:i*n_batch + n_batch]))
-#         return np.concatenate(xs)
-#
-#     def draw_samples(epoch):
-#         if hvd.rank() != 0:
-#             return
-#
-#         rows = 10 if hps.image_size <= 64 else 4
-#         cols = rows
-#         n_batch = rows*cols
-#         y = np.asarray([_y % hps.n_y for _y in (
-#             list(range(cols)) * rows)], dtype='int32')
-#
-#         # temperatures = [0., .25, .5, .626, .75, .875, 1.] #previously
-#         temperatures = [0., .25, .5, .6, .7, .8, .9, 1.]
-#
-#         x_samples = []
-#         x_samples.append(decode_batch(y, [.0]*n_batch))
-#         x_samples.append(decode_batch(y, [.25]*n_batch))
-#         x_samples.append(decode_batch(y, [.5]*n_batch))
-#         x_samples.append(decode_batch(y, [.6]*n_batch))
-#         x_samples.append(decode_batch(y, [.7]*n_batch))
-#         x_samples.append(decode_batch(y, [.8]*n_batch))
-#         x_samples.append(decode_batch(y, [.9] * n_batch))
-#         x_samples.append(decode_batch(y, [1.]*n_batch))
-#         # previously: 0, .25, .5, .625, .75, .875, 1.
-#
-#         for i in range(len(x_samples)):
-#             x_sample = np.reshape(
-#                 x_samples[i], (n_batch, hps.image_size, hps.image_size, 3))
-#             graphics.save_raster(x_sample, logdir +
-#                                  'epoch_{}_sample_{}.png'.format(epoch, i))
-#
-#     return draw_samples
-
-
 def sample_images(eps, sess, model, summary_writer, itr, bsize, sum_op, mode):
 
     y = np.zeros(bsize, dtype='int32')
     feed_dict = {model.Y: y,
-                 model.eps_std: np.ones(bsize)*eps}
-                 # model.train_cond: mode}
+                 model.eps_std: np.ones(bsize)*eps,
+                 model.train_cond: mode}
 
     [summary_str] = sess.run([sum_op],  feed_dict)
     summary_writer.add_summary(summary_str, itr)
@@ -221,10 +178,6 @@ def main(hps):
     n_images = 0
     train_time = 0.0
 
-    if hvd.rank() == 0:
-        train_logger = ResultLogger(logdir + "train.txt", **hps.__dict__)
-        test_logger = ResultLogger(logdir + "test.txt", **hps.__dict__)
-
     print('saving initial weights')
     model.save(logdir+"model_initial_weights.ckpt")
 
@@ -233,6 +186,8 @@ def main(hps):
         t = time.time()
 
         if epoch % summ_interval == 0:
+            print('--------------------')
+            print('sampling images')
             draw_samples(sess, hps, model, summary_writer, epoch, mode=1)
             # draw_samples(sess, hps, model, summary_writer, epoch, mode=0)
 
@@ -265,6 +220,8 @@ def main(hps):
             # model.polyak_swap()
 
             # Full validation run
+            print('##############')
+            print('testing model')
             test_loss, sum_str, _ = model.test()
             summary_writer.add_summary(sum_str, epoch)
 
