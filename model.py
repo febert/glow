@@ -7,6 +7,7 @@ import numpy as np
 import horovod.tensorflow as hvd
 from tensorflow.contrib.framework.python.ops import add_arg_scope
 
+from tfops import actnorm_center
 
 '''
 f_loss: function with as input the (x,y,reuse=False), and as output a list/tuple whose first element is the loss.
@@ -443,11 +444,16 @@ def revnet2d(name, z, logdet, hps, reverse=False, cond=None):
 def revnet2d_cond(h, hps):
     for d in range(hps.depth):
         with tf.variable_scope("d{}".format(d)):
+
+            # h = Z.actnorm("actnorm", h)
+            h = actnorm_center("actnorm_center", h, False)
+
             n_out = int(h.get_shape()[3])
             width = hps.width
             h = tf.nn.relu(Z.conv2d("l_1", h, width))
             h = tf.nn.relu(Z.conv2d("l_2", h, width, filter_size=[1, 1]))
             h = Z.conv2d_zeros("l_last", h, n_out)
+
         h = checkpoint_cond(h)
     return h
 
