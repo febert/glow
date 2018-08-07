@@ -135,7 +135,7 @@ def codec(hps):
             if i < hps.n_levels-1:
                 z = split2d_reverse("pool"+str(i), z, z_all, eps_std=eps_std)
             if cond_all is not None:
-                z, _ = revnet2d(str(i), z, 0, hps, reverse=True, cond_all=cond_all[i])
+                z, _ = revnet2d(str(i), z, 0, hps, reverse=True, cond=cond_all[i])
             else:
                 z, _ = revnet2d(str(i), z, 0, hps, reverse=True)
 
