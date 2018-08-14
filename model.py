@@ -80,8 +80,11 @@ def abstract_model_xy(sess, hps, feeds, train_iterator, test_iterator, data_init
     if hps.restore_path != '':
         m.restore(hps.restore_path)
     else:
-        with Z.arg_scope([Z.get_variable_ddi, Z.actnorm], init=True):
-            results_init = f_loss(None, reuse=True)
+        with Z.arg_scope([Z.get_variable_ddi, Z.actnorm], init=True):   # TODO: add argscoping for
+            if hps.eager == 0:
+                results_init = f_loss(None, reuse=True)
+            else:
+                results_init = f_loss(train_iterator, reuse=True)  # only for debugging
         sess.run(tf.global_variables_initializer())
         sess.run(results_init, {feeds['x']: data_init['x'],
                                 feeds['cond']: data_init['cond'],
@@ -178,11 +181,18 @@ def model(sess, hps, train_iterator, test_iterator, data_init, train=True):
 
     ncontxt = 2
     # Only for decoding/init, rest use iterators directly
-    with tf.name_scope('input'):
-        X = tf.placeholder(tf.uint8, [None,  hps.image_size, hps.image_size, 3], name='image')
-        Cond = tf.placeholder(tf.uint8, [None, ncontxt, hps.image_size, hps.image_size, 3], name='cond')
-        Y = tf.placeholder(tf.int32, [None], name='label')
-        lr = tf.placeholder(tf.float32, None, name='learning_rate')
+    if hps.eager == 0:
+        with tf.name_scope('input'):
+            X = tf.placeholder(tf.uint8, [None,  hps.image_size, hps.image_size, 3], name='image')
+            Cond = tf.placeholder(tf.uint8, [None, ncontxt, hps.image_size, hps.image_size, 3], name='cond')
+            Y = tf.placeholder(tf.int32, [None], name='label')
+            lr = tf.placeholder(tf.float32, None, name='learning_rate')
+
+    else:
+        lr = hps.lr
+        traj, Y = train_iterator.get_next()
+        X = traj[:, 2]
+        Cond = traj[:, :2]
 
     encoder, cond_encoder, decoder = codec(hps)
     hps.n_bins = 2. ** hps.n_bits_x
@@ -333,7 +343,6 @@ def model(sess, hps, train_iterator, test_iterator, data_init, train=True):
             x = postprocess(z)
         return x
 
-
     feeds = {'x': X, 'cond':Cond, 'y': Y}
     m = abstract_model_xy(sess, hps, feeds, train_iterator,
                           test_iterator, data_init, lr, f_loss, train=train)
@@ -432,7 +441,7 @@ def revnet2d(name, z, logdet, hps, reverse=False, cond=None):
     with tf.variable_scope(name):
         if not reverse:
             for i in range(hps.depth):
-                z, cond, logdet = checkpoint(z, cond, logdet)   #TODO: add caching for cond!
+                z, cond, logdet = checkpoint(z, cond, logdet)
                 z, logdet = revnet2d_step(str(i), z, cond, logdet, hps, reverse)
             z, cond, logdet = checkpoint(z, cond, logdet)
         else:
@@ -444,10 +453,7 @@ def revnet2d(name, z, logdet, hps, reverse=False, cond=None):
 def revnet2d_cond(h, hps):
     for d in range(hps.depth):
         with tf.variable_scope("d{}".format(d)):
-
-            # h = Z.actnorm("actnorm", h)
-            h = actnorm_center("actnorm_center", h, False)
-
+            h = Z.actnorm("actnorm", h)
             n_out = int(h.get_shape()[3])
             width = hps.width
             h = tf.nn.relu(Z.conv2d("l_1", h, width))

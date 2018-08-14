@@ -120,7 +120,10 @@ def get_data(hps, sess):
         CONF['batch_size'] = hps.local_batch_test
         test_iterator = build_tfrecord_single(CONF, 'train')
 
-        data_init = make_batch(sess, train_iterator, hps.local_batch_train, hps.local_batch_init)
+        if hps.eager == 1:
+            data_init = train_iterator
+        else:
+            data_init = make_batch(sess, train_iterator, hps.local_batch_train, hps.local_batch_init)
 
     else:
         raise Exception()
@@ -141,6 +144,9 @@ def main(hps):
 
     # Initialize Horovod.
     hvd.init()
+
+    if hps.eager == 1:
+        tf.enable_eager_execution()
 
     # Create tensorflow session
     sess = tensorflow_session()
@@ -275,6 +281,8 @@ if __name__ == "__main__":
 
     import argparse
     parser = argparse.ArgumentParser()
+    parser.add_argument("--eager", type=int, default=0, help="use eager")
+
     parser.add_argument("--verbose", action='store_true', help="Verbose mode")
     parser.add_argument("--restore_path", type=str, default='',
                         help="Location of checkpoint to restore")
