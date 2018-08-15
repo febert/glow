@@ -374,6 +374,9 @@ if __name__ == "__main__":
                         help="Type of flow. 0=reverse (realnvp), 1=shuffle, 2=invconv (ours)")
     parser.add_argument("--flow_coupling", type=int, default=0,
                         help="Coupling type: 0=additive, 1=affine")
+    parser.add_argument("--use_lu_decomp", type=int, default=0,
+                        help="whether to use LU-Decomposition: 0=dont use, 1=use")
+
 
     hps = parser.parse_args()  # So error if typo
     main(hps)

@@ -485,7 +485,7 @@ def revnet2d_step(name, z, cond, logdet, hps, reverse):
             elif hps.flow_permutation == 1:
                 z = Z.shuffle_features("shuffle", z)
             elif hps.flow_permutation == 2:
-                z, logdet = invertible_1x1_conv("invconv", z, logdet)
+                z, logdet = invertible_1x1_conv(hps, "invconv", z, logdet)
             else:
                 raise Exception()
 
@@ -532,7 +532,7 @@ def revnet2d_step(name, z, cond, logdet, hps, reverse):
             elif hps.flow_permutation == 1:
                 z = Z.shuffle_features("shuffle", z, reverse=True)
             elif hps.flow_permutation == 2:
-                z, logdet = invertible_1x1_conv(
+                z, logdet = invertible_1x1_conv(hps,
                     "invconv", z, logdet, reverse=True)
             else:
                 raise Exception()
@@ -564,9 +564,10 @@ def f_resnet(name, h, width, n_out=None):
 
 
 @add_arg_scope
-def invertible_1x1_conv(name, z, logdet, reverse=False):
+def invertible_1x1_conv(hps, name, z, logdet, reverse=False):
 
-    if True:  # Set to "False" to use the LU-decomposed version
+
+    if not hps.use_lu_decomp:  # Set to "False" to use the LU-decomposed version
 
         with tf.variable_scope(name):
 
@@ -602,7 +603,6 @@ def invertible_1x1_conv(name, z, logdet, reverse=False):
                 return z, logdet
 
     else:
-
         # LU-decomposed version
         shape = Z.int_shape(z)
         with tf.variable_scope(name):
