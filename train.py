@@ -355,6 +355,8 @@ if __name__ == "__main__":
                         help="Number of levels")
     parser.add_argument("--cond", type=str,
                         default=1, help="conditional model")
+    parser.add_argument("--condactnorm", type=str,
+                        default=1, help="whether to use actnorm in the conditional preprocessor")
 
     # Synthesis/Sampling hyperparameters:
     parser.add_argument("--n_sample", type=int, default=1,

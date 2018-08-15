@@ -453,12 +453,14 @@ def revnet2d(name, z, logdet, hps, reverse=False, cond=None):
 def revnet2d_cond(h, hps):
     for d in range(hps.depth):
         with tf.variable_scope("d{}".format(d)):
-            h = Z.actnorm("actnorm", h)
             n_out = int(h.get_shape()[3])
             width = hps.width
             h = tf.nn.relu(Z.conv2d("l_1", h, width))
             h = tf.nn.relu(Z.conv2d("l_2", h, width, filter_size=[1, 1]))
             h = Z.conv2d_zeros("l_last", h, n_out)
+
+            if hps.condactnorm == 1:
+                h = Z.actnorm("actnorm", h)
 
         h = checkpoint_cond(h)
     return h
@@ -491,7 +493,7 @@ def revnet2d_step(name, z, cond, logdet, hps, reverse):
             z2 = z[:, :, :, n_z // 2:]
 
             if hps.flow_coupling == 0:
-                z2 += f("f1", z1, cond, hps.width)
+                z2 += f("f1", z1, cond, hps.width, n_z//2)
             elif hps.flow_coupling == 1:
                 h = f("f1", z1, cond, hps.width, n_z)
                 shift = h[:, :, :, 0::2]
@@ -511,7 +513,7 @@ def revnet2d_step(name, z, cond, logdet, hps, reverse):
             z2 = z[:, :, :, n_z // 2:]
 
             if hps.flow_coupling == 0:
-                z2 -= f("f1", z1, cond, hps.width)
+                z2 -= f("f1", z1, cond, hps.width, n_z//2)
             elif hps.flow_coupling == 1:
                 h = f("f1", z1, cond, hps.width, n_z)
                 shift = h[:, :, :, 0::2]
