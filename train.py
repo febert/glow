@@ -8,6 +8,8 @@ import time
 from data_loaders.read_tf_records2 import build_tfrecord_single
 from data_loaders.read_tf_records2 import CONF
 import matplotlib.pyplot as plt
+from tensorflow.python import debug as tf_debug
+
 
 import horovod.tensorflow as hvd
 import numpy as np
@@ -150,8 +152,7 @@ def main(hps):
 
     # Create tensorflow session
     sess = tensorflow_session()
-
-    tf.add_check_numerics_ops()
+    # sess = tf_debug.LocalCLIDebugWrapperSession(sess)
 
     # Download and load dataset.
     tf.set_random_seed(hvd.rank() + hvd.size() * hps.seed)
@@ -181,6 +182,7 @@ def main(hps):
     _print('epoch n_processed n_images ips dtrain dtest dsample dtot train_results test_results msg')
 
     # Train
+    tf.add_check_numerics_ops()
     sess.graph.finalize()
     n_processed = 0
     n_images = 0

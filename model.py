@@ -460,7 +460,9 @@ def revnet2d_cond(h, hps):
             h = Z.conv2d_zeros("l_last", h, n_out)
 
             if hps.condactnorm == 1:
-                h = Z.actnorm("actnorm", h)
+                h = Z.actnorm("actnorm_cond_d{}".format(d), h)
+                with tf.variable_scope("actnorm_cond_output_d{}".format(d)):
+                    h = tf.identity(h, name="actnorm_cond_output_d{}".format(d))
 
         h = checkpoint_cond(h)
     return h
