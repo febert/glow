@@ -151,6 +151,8 @@ def main(hps):
     # Create tensorflow session
     sess = tensorflow_session()
 
+    tf.add_check_numerics_ops()
+
     # Download and load dataset.
     tf.set_random_seed(hvd.rank() + hvd.size() * hps.seed)
     np.random.seed(hvd.rank() + hvd.size() * hps.seed)
