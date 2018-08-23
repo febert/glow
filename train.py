@@ -11,7 +11,6 @@ import matplotlib.pyplot as plt
 from tensorflow.python import debug as tf_debug
 
 
-import horovod.tensorflow as hvd
 import numpy as np
 import tensorflow as tf
 import graphics
@@ -30,8 +29,7 @@ summ_interval = 10 #episodes
 
 
 def _print(*args, **kwargs):
-    if hvd.rank() == 0:
-        print(*args, **kwargs)
+    print(*args, **kwargs)
 
 def sample_images(eps, sess, model, summary_writer, itr, bsize, sum_op, mode):
 
@@ -63,7 +61,7 @@ def get_data(hps, sess):
                           'imagenet': 256, 'celeba': 256, 'lsun_realnvp': 64, 'lsun': 256, 'cartgripper':64}[hps.problem]
     if hps.n_test == -1:
         hps.n_test = {'mnist': 10000, 'cifar10': 10000, 'imagenet-oord': 50000, 'imagenet': 50000,
-                      'celeba': 3000, 'lsun_realnvp': 300*hvd.size(), 'lsun': 300*hvd.size(), 'cartgripper': 5000}[hps.problem]
+                      'celeba': 3000, 'lsun_realnvp': 300, 'lsun': 300, 'cartgripper': 5000}[hps.problem]
     hps.n_y = {'mnist': 10, 'cifar10': 10, 'imagenet-oord': 1000,
                'imagenet': 1000, 'celeba': 1, 'lsun_realnvp': 1, 'lsun': 1, 'cartgripper':1}[hps.problem]
     if hps.data_dir == "" and hps.problem != 'cartgripper':
@@ -87,21 +85,18 @@ def get_data(hps, sess):
     hps.local_batch_init = hps.n_batch_init * \
         s * s // (hps.image_size * hps.image_size)
 
-    print("Rank {} Batch sizes Train {} Test {} Init {}".format(
-        hvd.rank(), hps.local_batch_train, hps.local_batch_test, hps.local_batch_init))
-
     if hps.problem in ['imagenet-oord', 'imagenet', 'celeba', 'lsun_realnvp', 'lsun']:
         hps.direct_iterator = True
         import data_loaders.get_data as v
         train_iterator, test_iterator, data_init = \
-            v.get_data(sess, hps.data_dir, hvd.size(), hvd.rank(), hps.pmap, hps.fmap, hps.local_batch_train,
+            v.get_data(sess, hps.data_dir, 1, 1, hps.pmap, hps.fmap, hps.local_batch_train,
                        hps.local_batch_test, hps.local_batch_init, hps.image_size, hps.rnd_crop)
 
     elif hps.problem in ['mnist', 'cifar10']:
         hps.direct_iterator = False
         import data_loaders.get_mnist_cifar as v
         train_iterator, test_iterator, data_init = \
-            v.get_data(hps.problem, hvd.size(), hvd.rank(), hps.dal, hps.local_batch_train,
+            v.get_data(hps.problem, 1, 1, hps.dal, hps.local_batch_train,
                        hps.local_batch_test, hps.local_batch_init,  hps.image_size)
 
     elif hps.problem == 'cartgripper':
@@ -145,7 +140,6 @@ def process_results(results):
 def main(hps):
 
     # Initialize Horovod.
-    hvd.init()
 
     if hps.eager == 1:
         tf.enable_eager_execution()
@@ -156,8 +150,8 @@ def main(hps):
     # sess = tf_debug.TensorBoardDebugWrapperSession(sess, 'localhost:6010')
 
     # Download and load dataset.
-    tf.set_random_seed(hvd.rank() + hvd.size() * hps.seed)
-    np.random.seed(hvd.rank() + hvd.size() * hps.seed)
+    tf.set_random_seed(hps.seed)
+    np.random.seed(hps.seed)
 
     # Get data and set train_its and valid_its
     train_iterator, test_iterator, data_init = get_data(hps, sess)
@@ -215,9 +209,9 @@ def main(hps):
                 print('itr {} starting epoch {}, results [local_loss, bits_x, bits_y, pred_loss]: {}'.format(it, epoch, stats))
 
             # Images seen wrt anchor resolution
-            n_processed += hvd.size() * hps.n_batch_train
+            n_processed +=  hps.n_batch_train
             # Actual images seen at current resolution
-            n_images += hvd.size() * hps.local_batch_train
+            n_images +=  hps.local_batch_train
 
 
         dtrain = time.time() - t
@@ -238,26 +232,23 @@ def main(hps):
             # Save checkpoint
             model.save(logdir + "/model_epoch{}.ckpt".format(epoch))
 
-    if hvd.rank() == 0:
-        _print("Finished!")
+    _print("Finished!")
 
 # Get number of training and validation iterations
 
 
 def get_its(hps):
     # These run for a fixed amount of time. As anchored batch is smaller, we've actually seen fewer examples
-    train_its = int(np.ceil(hps.n_train / (hps.n_batch_train * hvd.size())))
-    test_its = int(np.ceil(hps.n_test / (hps.n_batch_train * hvd.size())))
-    train_epoch = train_its * hps.n_batch_train * hvd.size()
+    train_its = int(np.ceil(hps.n_train / (hps.n_batch_train )))
+    test_its = int(np.ceil(hps.n_test / (hps.n_batch_train )))
+    train_epoch = train_its * hps.n_batch_train
 
     # Do a full validation run
-    if hvd.rank() == 0:
-        print(hps.n_test, hps.local_batch_test, hvd.size())
-    assert hps.n_test % (hps.local_batch_test * hvd.size()) == 0
-    full_test_its = hps.n_test // (hps.local_batch_test * hvd.size())
+    print(hps.n_test, hps.local_batch_test)
+    assert hps.n_test % (hps.local_batch_test) == 0
+    full_test_its = hps.n_test // (hps.local_batch_test)
 
-    if hvd.rank() == 0:
-        print("Train epoch size: " + str(train_epoch))
+    print("Train epoch size: " + str(train_epoch))
     return train_its, test_its, full_test_its
 
 
@@ -271,7 +262,7 @@ def tensorflow_session():
     config = tf.ConfigProto()
     config.gpu_options.allow_growth = True
     # Pin GPU to local rank (one GPU per process)
-    config.gpu_options.visible_device_list = str(hvd.local_rank())
+    config.gpu_options.visible_device_list = str(0)
     sess = tf.Session(config=config)
     return sess
 

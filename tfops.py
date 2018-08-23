@@ -2,7 +2,6 @@ import tensorflow as tf
 from tensorflow.contrib.framework.python.ops import add_arg_scope, arg_scope
 from tensorflow.contrib.layers import variance_scaling_initializer
 import numpy as np
-import horovod.tensorflow as hvd
 
 # Debugging function
 do_print_act_stats = True
@@ -211,8 +210,7 @@ def add_edge_padding(x, filter_size):
         name = "_".join([str(dim) for dim in [a, b, *int_shape(x)[1:3]]])
         pads = tf.get_collection(name)
         if not pads:
-            if hvd.rank() == 0:
-                print("Creating pad", name)
+            print("Creating pad", name)
             pad = np.zeros([1] + int_shape(x)[1:3] + [1], dtype='float32')
             pad[:, :a, :, 0] = 1.
             pad[:, -a:, :, 0] = 1.

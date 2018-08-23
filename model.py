@@ -4,7 +4,6 @@ import pdb
 import tfops as Z
 import optim
 import numpy as np
-import horovod.tensorflow as hvd
 from tensorflow.contrib.framework.python.ops import add_arg_scope
 
 from tfops import actnorm_center
@@ -91,7 +90,6 @@ def abstract_model_xy(sess, hps, feeds, train_iterator, test_iterator, data_init
         sess.run(results_init, {feeds['x']: data_init['x'],
                                 feeds['cond']: data_init['cond'],
                                 feeds['y']: data_init['y']})
-    sess.run(hvd.broadcast_global_variables(0))
 
     return m
 
