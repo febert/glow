@@ -13,7 +13,6 @@ from graphics import save_interpolations
 
 from train import tensorflow_session, get_data, get_its
 
-import horovod.tensorflow as hvd
 import numpy as np
 import tensorflow as tf
 import graphics
@@ -31,8 +30,7 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 
 def _print(*args, **kwargs):
-    if hvd.rank() == 0:
-        print(*args, **kwargs)
+    print(*args, **kwargs)
 
 
 def process_results(results):
@@ -92,15 +90,13 @@ def interpolate(test_iterator, model, steps = 10):
 
 def lt_interpol(hps):
 
-    # Initialize Horovod.
-    hvd.init()
 
     # Create tensorflow session
     sess = tensorflow_session()
 
     # Download and load dataset.
-    tf.set_random_seed(hvd.rank() + hvd.size() * hps.seed)
-    np.random.seed(hvd.rank() + hvd.size() * hps.seed)
+    tf.set_random_seed(hps.seed)
+    np.random.seed(hps.seed)
 
     # Get data and set train_its and valid_its
     train_iterator, test_iterator, data_init = get_data(hps, sess)

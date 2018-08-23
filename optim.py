@@ -1,6 +1,5 @@
 import tensorflow as tf
 import tfops as Z
-import horovod.tensorflow as hvd
 import pdb
 
 # Optimizers
@@ -128,7 +127,7 @@ def adam2_old(params, cost_or_grads, lr=3e-4, mom1=0.9, mom2=0.999, epsilon=1e-8
     # all-reduce
     grads1 = [Z.allreduce_mean(g) for g in gs]
     grads2 = [Z.allreduce_mean(tf.square(g)) for g in gs]
-    mom2 = tf.maximum(0., 1. - (hvd.size() * (1 - mom2)))
+    mom2 = tf.maximum(0., 1. - (1 - mom2))
 
     t = tf.Variable(1., 'adam_t')
     lr_t = lr * tf.sqrt((1. - tf.pow(mom2, t))) / (1. - tf.pow(mom1, t))
