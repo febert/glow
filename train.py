@@ -153,6 +153,7 @@ def main(hps):
     # Create tensorflow session
     sess = tensorflow_session()
     # sess = tf_debug.LocalCLIDebugWrapperSession(sess)
+    # sess = tf_debug.TensorBoardDebugWrapperSession(sess, 'localhost:6010')
 
     # Download and load dataset.
     tf.set_random_seed(hvd.rank() + hvd.size() * hps.seed)
@@ -173,8 +174,6 @@ def main(hps):
     # Create model
     import model
     model = model.model(sess, hps, train_iterator, test_iterator, data_init)
-    # tf.add_check_numerics_ops()
-
     summary_writer = tf.summary.FileWriter(hps.logdir, graph=sess.graph, flush_secs=10)
 
     _print(hps)
@@ -182,7 +181,7 @@ def main(hps):
     _print('epoch n_processed n_images ips dtrain dtest dsample dtot train_results test_results msg')
 
     # Train
-    tf.add_check_numerics_ops()
+    # tf.add_check_numerics_ops()
     sess.graph.finalize()
     n_processed = 0
     n_images = 0

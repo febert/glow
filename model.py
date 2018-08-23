@@ -27,6 +27,7 @@ def abstract_model_xy(sess, hps, feeds, train_iterator, test_iterator, data_init
 
     # === Loss and optimizer
     loss_train, stats_train = f_loss(train_iterator)
+    #tf.add_check_numerics_ops()
     all_params = tf.trainable_variables()
 
     if train:
@@ -85,6 +86,7 @@ def abstract_model_xy(sess, hps, feeds, train_iterator, test_iterator, data_init
                 results_init = f_loss(None, reuse=True)
             else:
                 results_init = f_loss(train_iterator, reuse=True)  # only for debugging
+
         sess.run(tf.global_variables_initializer())
         sess.run(results_init, {feeds['x']: data_init['x'],
                                 feeds['cond']: data_init['cond'],
@@ -123,6 +125,7 @@ def codec(hps):
             if cond_all is None:
                 z, objective = revnet2d(str(i), z, objective, hps)
             else:
+                #tf.add_check_numerics_ops()
                 z, objective = revnet2d(str(i), z, objective, hps, cond=cond_all[i])
 
             if i < hps.n_levels-1:
@@ -209,8 +212,9 @@ def model(sess, hps, train_iterator, test_iterator, data_init, train=True):
 
     def _f_loss(x, y, reuse=False, cond=None):
 
-
         with tf.variable_scope('model', reuse=reuse):
+            #tf.add_check_numerics_ops()
+
             y_onehot = tf.cast(tf.one_hot(y, hps.n_y, 1, 0), 'float32')
 
             objective = tf.zeros_like(x, dtype='float32')[:, 0, 0, 0]
@@ -222,6 +226,7 @@ def model(sess, hps, train_iterator, test_iterator, data_init, train=True):
 
             # Encode
             z = Z.squeeze2d(z, 2)  # > 16x16x12
+            #tf.add_check_numerics_ops()
 
             if cond is not None:
                 cond = preprocess(cond)
@@ -229,6 +234,7 @@ def model(sess, hps, train_iterator, test_iterator, data_init, train=True):
                 cond_all = cond_encoder(cond, hps)
             else:
                 cond_all = None
+
 
             z, z_all, objective = encoder(z, cond_all, objective)
 
@@ -255,11 +261,16 @@ def model(sess, hps, train_iterator, test_iterator, data_init, train=True):
 
                 # Classification accuracy
                 y_predicted = tf.argmax(y_logits, 1, output_type=tf.int32)
-                classification_error = 1 - \
-                    tf.cast(tf.equal(y_predicted, y), tf.float32)
+                #######################################################
+                # classification_error = 1 - \
+                #     tf.cast(tf.equal(y_predicted, y), tf.float32)
+                classification_error = 0.
+
             else:
                 bits_y = tf.zeros_like(bits_x)
                 classification_error = tf.ones_like(bits_x)
+
+            #tf.add_check_numerics_ops()
 
         return bits_x, bits_y, classification_error
 
@@ -352,10 +363,15 @@ def model(sess, hps, train_iterator, test_iterator, data_init, train=True):
     m.train_cond = tf.placeholder(tf.int64, (), 'traincond')
 
     if hps.cond == 1:
-        cond_data = tf.cond(m.train_cond > 0,
-                       # if 1 use trainigbatch else validation batch
-                       train_iterator.get_next,
-                       test_iterator.get_next)[0]
+        ###################
+        # cond_data = tf.cond(m.train_cond > 0,
+        #                # if 1 use trainigbatch else validation batch
+        #                train_iterator.get_next,
+        #                test_iterator.get_next)[0]
+
+        cond_data = train_iterator.get_next()[0]
+
+
         #pick the first timestep
         cond_data = cond_data[:, :ncontxt]
     else:
@@ -461,8 +477,9 @@ def revnet2d_cond(h, hps):
 
             if hps.condactnorm == 1:
                 h = Z.actnorm("actnorm_cond_d{}".format(d), h)
-                with tf.variable_scope("actnorm_cond_output_d{}".format(d)):
-                    h = tf.identity(h, name="actnorm_cond_output_d{}".format(d))
+                # with tf.variable_scope("actnorm_cond_output_d{}".format(d)):
+                #     h = tf.identity(h, name="actnorm_cond_output_d{}".format(d))
+                #     h = tf.print(h, [tf.reduce_sum(h[0])])
 
         h = checkpoint_cond(h)
     return h
@@ -500,7 +517,7 @@ def revnet2d_step(name, z, cond, logdet, hps, reverse):
                 h = f("f1", z1, cond, hps.width, n_z)
                 shift = h[:, :, :, 0::2]
                 #scale = tf.exp(h[:, :, :, 1::2])
-                scale = tf.nn.sigmoid(h[:, :, :, 1::2] + 2.)
+                scale = tf.nn.sigmoid(h[:, :, :, 1::2] + 2.) + 1e-10
                 z2 += shift
                 z2 *= scale
                 logdet += tf.reduce_sum(tf.log(scale), axis=[1, 2, 3])
@@ -520,7 +537,7 @@ def revnet2d_step(name, z, cond, logdet, hps, reverse):
                 h = f("f1", z1, cond, hps.width, n_z)
                 shift = h[:, :, :, 0::2]
                 #scale = tf.exp(h[:, :, :, 1::2])
-                scale = tf.nn.sigmoid(h[:, :, :, 1::2] + 2.)
+                scale = tf.nn.sigmoid(h[:, :, :, 1::2] + 2.) + 1e-10
                 z2 /= scale
                 z2 -= shift
                 logdet -= tf.reduce_sum(tf.log(scale), axis=[1, 2, 3])
