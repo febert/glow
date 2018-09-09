@@ -8,15 +8,14 @@ import time
 from data_loaders.read_tf_records2 import build_tfrecord_single
 from data_loaders.read_tf_records2 import CONF as CARTGRIPPER_CONF
 import matplotlib.pyplot as plt
-from graphics import save_interpolations
+from glow.graphics import save_interpolations
 
+import glow.model as model
 
-from train import tensorflow_session, get_data, get_its
+from glow.train import tensorflow_session, get_data, get_its
 
 import numpy as np
 import tensorflow as tf
-import graphics
-from utils import ResultLogger
 
 import pdb
 
@@ -111,7 +110,6 @@ def lt_interpol(hps):
         os.mkdir(logdir)
 
     # Create model
-    import model
     model = model.model(sess, hps, train_iterator, test_iterator, data_init, train=False)
 
     images = interpolate(test_iterator, model, steps=20)

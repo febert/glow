@@ -47,7 +47,7 @@ def decode_im(conf, features, image_name):
 
 
 
-def build_tfrecord_single(conf, mode='train', input_files=None, shuffle=True, buffersize=512):
+def build_tfrecord_single(conf, mode='train',  shuffle=True, buffersize=512, mix_good_bad=True):
     """Create input tfrecord tensors.
 
     Args:
@@ -60,27 +60,18 @@ def build_tfrecord_single(conf, mode='train', input_files=None, shuffle=True, bu
     Raises:
       RuntimeError: if no files found.
     """
-    if 'sdim' in conf:
-        sdim = conf['sdim']
-    else: sdim = 3
-    if 'adim' in conf:
-        adim = conf['adim']
-    else: adim = 4
-    print('adim', adim)
-    print('sdim', sdim)
 
-    if input_files is not None:
-        if not isinstance(input_files, list):
-            filenames = [input_files]
-        else: filenames = input_files
+    if mix_good_bad:
+        filenames = gfile.Glob(conf['data_dir'] + '/good/' + mode + '/*')
+        filenames += gfile.Glob(conf['data_dir'] + '/bad/' + mode + '/*')
     else:
         filenames = gfile.Glob(os.path.join(conf['data_dir'], mode) + '/*')
-        if mode == 'val' or mode == 'test':
-            shuffle = False
-        else:
-            shuffle = True
-        if not filenames:
-            raise RuntimeError('No data_files files found.')
+    if mode == 'val' or mode == 'test':
+        shuffle = False
+    else:
+        shuffle = True
+    if not filenames:
+        raise RuntimeError('No data_files files found.')
 
     print('using shuffle: ', shuffle)
     if shuffle:
@@ -174,24 +165,17 @@ CONF['visualize'] = False
 CONF['context_frames'] = 2
 CONF['ncam'] = 1
 CONF['view'] = 0   # only first view
-CONF['sdim'] = 5
-CONF['adim'] = 4
-
+CONF['data_dir'] = '/mnt/sda1/pushing_data/cartgripper/cartgripper_xz_grasp/vanilla_env_rand_actions'   # only first view
+CONF['sequence_length'] = 30  # only first view
+CONF['orig_size'] = [48,64]
+CONF['batch_size'] = 10
 
 def main():
     # for debugging only:
     os.environ["CUDA_VISIBLE_DEVICES"] = "1"
     print('using CUDA_VISIBLE_DEVICES=', os.environ["CUDA_VISIBLE_DEVICES"])
-    conf = {}
 
-    print('-------------------------------------------------------------------')
-    print('verify current settings!! ')
-    for key in list(conf.keys()):
-        print(key, ': ', conf[key])
-    print('-------------------------------------------------------------------')
-    print('testing the reader')
-
-    dict = build_tfrecord_input(conf, mode='test', buffersize=10)
+    images = build_tfrecord_single(CONF, mode='test', buffersize=10)
 
     sess = tf.InteractiveSession()
     tf.train.start_queue_runners(sess)
@@ -205,7 +189,7 @@ def main():
 
         # images, actions, endeff, gen_images, gen_endeff = sess.run([dict['images'], dict['actions'], dict['endeffector_pos'], dict['gen_images'], dict['gen_states']])
         # images, actions, endeff = sess.run([dict['gen_images'], dict['actions'], dict['endeffector_pos']])
-        images, actions, endeff = sess.run([dict['images'], dict['actions'], dict['endeffector_pos']])
+        images, actions, endeff = sess.run([images.get_next()])
         # [images] = sess.run([dict['images']])
 
         # plt.imshow(firstlastnoarm[0,0])

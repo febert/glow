@@ -25,7 +25,7 @@ learn = tf.contrib.learn
 # Surpress verbose warnings
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
-summ_interval = 10 #episodes
+summ_interval = 500 #episodes
 
 
 def _print(*args, **kwargs):
@@ -34,15 +34,15 @@ def _print(*args, **kwargs):
 def sample_images(eps, sess, model, summary_writer, itr, bsize, sum_op, mode):
 
     y = np.zeros(bsize, dtype='int32')
-    feed_dict = {model.Y: y,
+    feed_dict = {
                  model.eps_std: np.ones(bsize)*eps,
                  model.train_cond: mode}
 
     [summary_str] = sess.run([sum_op],  feed_dict)
     summary_writer.add_summary(summary_str, itr)
 
-def draw_samples(sess, hps, model, summary_writer, itr, mode):
-    if mode == 1:
+def draw_samples(sess, hps, model, summary_writer, itr, traincond):
+    if traincond == 1:
         sum_temp = model.x_sampled_grid_train
         bsize = hps.local_batch_train
     else:
@@ -50,7 +50,7 @@ def draw_samples(sess, hps, model, summary_writer, itr, mode):
         bsize = hps.local_batch_test
 
     for eps, sum in zip(*sum_temp):
-        sample_images(eps, sess, model, summary_writer, itr, bsize, sum, mode)
+        sample_images(eps, sess, model, summary_writer, itr, bsize, sum, traincond)
 
 # ===
 # Code for getting data
@@ -62,8 +62,7 @@ def get_data(hps, sess):
     if hps.n_test == -1:
         hps.n_test = {'mnist': 10000, 'cifar10': 10000, 'imagenet-oord': 50000, 'imagenet': 50000,
                       'celeba': 3000, 'lsun_realnvp': 300, 'lsun': 300, 'cartgripper': 5000}[hps.problem]
-    hps.n_y = {'mnist': 10, 'cifar10': 10, 'imagenet-oord': 1000,
-               'imagenet': 1000, 'celeba': 1, 'lsun_realnvp': 1, 'lsun': 1, 'cartgripper':1}[hps.problem]
+
     if hps.data_dir == "" and hps.problem != 'cartgripper':
         hps.data_dir = {'mnist': None, 'cifar10': None, 'imagenet-oord': '/mnt/host/imagenet-oord-tfr', 'imagenet': '/mnt/host/imagenet-tfr',
                         'celeba': '/mnt/host/celeba-reshard-tfr', 'lsun_realnvp': '/mnt/host/lsun_realnvp', 'lsun': '/mnt/host/lsun'}[hps.problem]
@@ -106,21 +105,19 @@ def get_data(hps, sess):
             CONF['sdim'] = 4
             CONF['adim'] = 5
             CONF['orig_size'] = [64, 64]
-        elif 'autograsp_bowls' in hps.data_dir:
-            CONF['sdim'] = 5
-            CONF['adim'] = 4
-            CONF['orig_size'] = [48, 64]
-        CONF['sequence_length'] = hps.seq_len
-
-        CONF['batch_size'] = hps.local_batch_train
-        train_iterator = build_tfrecord_single(CONF, 'train')
-        CONF['batch_size'] = hps.local_batch_test
-        test_iterator = build_tfrecord_single(CONF, 'train')
-
-        if hps.eager == 1:
-            data_init = train_iterator
+            CONF['batch_size'] = hps.local_batch_train
+            train_iterator = build_tfrecord_single(CONF, 'train')
+            CONF['batch_size'] = hps.local_batch_test
+            test_iterator = build_tfrecord_single(CONF, 'test')
         else:
-            data_init = make_batch(sess, train_iterator, hps.local_batch_train, hps.local_batch_init)
+
+            from glow.data_loaders.base_dataset import BaseVideoDataset
+            dataset = BaseVideoDataset(hps.data_dir, hps.local_batch_train)
+
+            train_iterator = dataset.get_iterator('env/image_view0/encoded', 'train')
+            test_iterator = dataset.get_iterator('env/image_view0/encoded', 'test')
+
+        data_init = make_batch(sess, train_iterator, hps.local_batch_train, hps.local_batch_init)
 
     else:
         raise Exception()
@@ -184,18 +181,19 @@ def main(hps):
     print('saving initial weights')
     model.save(logdir+"model_initial_weights.ckpt")
 
-    tcurr = time.time()
     for epoch in range(0, hps.epochs):
         t = time.time()
 
-        if epoch % summ_interval == 0:
-            print('--------------------')
-            print('sampling images')
-            draw_samples(sess, hps, model, summary_writer, epoch, mode=1)
-            # draw_samples(sess, hps, model, summary_writer, epoch, mode=0)
-
         print('starting epoch: ', epoch)
         for it in range(hps.train_its):
+
+            if it % summ_interval == 0:
+                print('--------------------')
+                print('sampling images')
+                draw_samples(sess, hps, model, summary_writer, epoch, traincond=1)
+                # draw_samples(sess, hps, model, summary_writer, epoch, mode=0)
+
+
             # Set learning rate, linearly annealed from 0 in the first hps.epochs_warmup epochs.
             lr = hps.lr * min(1., n_processed /
                               (hps.n_train * hps.epochs_warmup))
@@ -203,7 +201,9 @@ def main(hps):
             # Run a training step synchronously.
             _t = time.time()
             sum_str, stats = model.train(lr)
-            summary_writer.add_summary(sum_str, it + epoch*hps.train_its)
+
+            if epoch % summ_interval == 0:
+                summary_writer.add_summary(sum_str, it + epoch*hps.train_its)
 
             if it % 100 == 0:
                 print('itr {} starting epoch {}, results [local_loss, bits_x, bits_y, pred_loss]: {}'.format(it, epoch, stats))
@@ -303,9 +303,9 @@ if __name__ == "__main__":
 
     # Optimization hyperparams:
     parser.add_argument("--n_train", type=int,
-                        default=50000, help="Train epoch size")
-    parser.add_argument("--n_test", type=int, default=-
-                        1, help="Valid epoch size")
+                        default=1.8e6, help="Train epoch size")
+    parser.add_argument("--n_test", type=int, default=9e4
+                        , help="Valid epoch size")
     parser.add_argument("--n_batch_train", type=int,
                         default=64, help="Minibatch size")
     parser.add_argument("--n_batch_test", type=int,
@@ -348,7 +348,7 @@ if __name__ == "__main__":
     parser.add_argument("--n_levels", type=int, default=3,
                         help="Number of levels")
     parser.add_argument("--cond", type=str,
-                        default=1, help="conditional model")
+                        default=0, help="conditional model")
     parser.add_argument("--condactnorm", type=str,
                         default=1, help="whether to use actnorm in the conditional preprocessor")
 

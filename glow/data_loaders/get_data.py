@@ -80,7 +80,12 @@ def make_batch(sess, itr, itr_batch_size, required_batch_size):
     xs, cond, ys = [], [], []
     data = itr.get_next()
     for i in range(k):
-        traj, y = sess.run(data)
+        data_batch = sess.run(data)
+        if isinstance(data_batch, list):
+            traj, y = data_batch
+        else:
+            traj = data_batch
+            y = np.zeros(traj.shape[0])
         xs.append(traj[:,2])
         cond.append(traj[:,:2],)
         ys.append(y)

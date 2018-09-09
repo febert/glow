@@ -1,12 +1,12 @@
 import tensorflow as tf
 import pdb
 
-import tfops as Z
-import optim
+import glow.tfops as Z
+import glow.optim as optim
 import numpy as np
 from tensorflow.contrib.framework.python.ops import add_arg_scope
 
-from tfops import actnorm_center
+from glow.tfops import actnorm_center
 
 '''
 f_loss: function with as input the (x,y,reuse=False), and as output a list/tuple whose first element is the loss.
@@ -31,7 +31,7 @@ def abstract_model_xy(sess, hps, feeds, train_iterator, test_iterator, data_init
 
     if train:
         if hps.gradient_checkpointing == 1:
-            from memory_saving_gradients import gradients
+            from glow.memory_saving_gradients import gradients
             gs = gradients(loss_train, all_params)
         else:
             gs = tf.gradients(loss_train, all_params)
@@ -47,10 +47,9 @@ def abstract_model_xy(sess, hps, feeds, train_iterator, test_iterator, data_init
         m.train = lambda _lr: sess.run([train_op, train_sum_op, stats_train], {lr: _lr})[1:]
     else:
         def _train(_lr):
-            _x, _y = train_iterator()
+            _x = train_iterator()
             train_sum_op = tf.summary.scalar('train_loss', loss_train)
-            return sess.run([train_op, train_sum_op, stats_train], {feeds['x']: _x,
-                                                      feeds['y']: _y, lr: _lr})[1]
+            return sess.run([train_op, train_sum_op, stats_train], {feeds['x']: _x, lr: _lr})[1]
         m.train = _train
 
     m.polyak_swap = lambda: sess.run(polyak_swap_op)
@@ -81,15 +80,14 @@ def abstract_model_xy(sess, hps, feeds, train_iterator, test_iterator, data_init
         m.restore(hps.restore_path)
     else:
         with Z.arg_scope([Z.get_variable_ddi, Z.actnorm], init=True):   # TODO: add argscoping for
-            if hps.eager == 0:
-                results_init = f_loss(None, reuse=True)
-            else:
-                results_init = f_loss(train_iterator, reuse=True)  # only for debugging
+            results_init = f_loss(None, reuse=True)
 
         sess.run(tf.global_variables_initializer())
-        sess.run(results_init, {feeds['x']: data_init['x'],
-                                feeds['cond']: data_init['cond'],
-                                feeds['y']: data_init['y']})
+        if hps.cond == 1:
+            sess.run(results_init, {feeds['x']: data_init['x'],
+                                    feeds['cond']: data_init['cond']})
+        else:
+            sess.run(results_init, {feeds['x']: data_init['x']})
 
     return m
 
@@ -149,17 +147,14 @@ def codec(hps):
     return encoder, cond_encoder, decoder
 
 
-def prior(name, y_onehot, hps):
+def prior(name, hps, bsize):
 
     with tf.variable_scope(name):
         n_z = hps.top_shape[-1]
 
-        h = tf.zeros([tf.shape(y_onehot)[0]]+hps.top_shape[:2]+[2*n_z])
+        h = tf.zeros([bsize]+hps.top_shape[:2]+[2*n_z])
         if hps.learntop:
             h = Z.conv2d_zeros('p', h, 2*n_z)
-        if hps.ycond:
-            h += tf.reshape(Z.linear_zeros("y_emb", y_onehot,
-                                           2*n_z), [-1, 1, 1, 2 * n_z])
 
         pz = Z.gaussian_diag(h[:, :, :, :n_z], h[:, :, :, n_z:])
 
@@ -191,7 +186,7 @@ def model(sess, hps, train_iterator, test_iterator, data_init, train=True):
 
     else:
         lr = hps.lr
-        traj, Y = train_iterator.get_next()
+        traj = train_iterator.get_next()
         X = traj[:, 2]
         Cond = traj[:, :2]
 
@@ -208,12 +203,10 @@ def model(sess, hps, train_iterator, test_iterator, data_init, train=True):
     def postprocess(x):
         return tf.cast(tf.clip_by_value(tf.floor((x + .5)*hps.n_bins)*(256./hps.n_bins), 0, 255), 'uint8')
 
-    def _f_loss(x, y, reuse=False, cond=None):
+    def _f_loss(x, reuse=False, cond=None):
 
         with tf.variable_scope('model', reuse=reuse):
             #tf.add_check_numerics_ops()
-
-            y_onehot = tf.cast(tf.one_hot(y, hps.n_y, 1, 0), 'float32')
 
             objective = tf.zeros_like(x, dtype='float32')[:, 0, 0, 0]
 
@@ -239,7 +232,7 @@ def model(sess, hps, train_iterator, test_iterator, data_init, train=True):
             hps.top_shape = Z.int_shape(z)[1:]
 
             # Prior
-            logp, _ = prior("prior", y_onehot, hps)
+            logp, _ = prior("prior", hps, tf.shape(x)[0])
             objective += logp(z)
 
             # Generative loss
@@ -247,37 +240,17 @@ def model(sess, hps, train_iterator, test_iterator, data_init, train=True):
             bits_x = nobj / (np.log(2.) * int(x.get_shape()[1]) * int(
                 x.get_shape()[2]) * int(x.get_shape()[3]))  # bits per subpixel
 
-            # Predictive loss
-            if hps.weight_y > 0 and hps.ycond:
-
-                # Classification loss
-                h_y = tf.reduce_mean(z, axis=[1, 2])
-
-                y_logits = Z.linear_zeros("classifier", h_y, hps.n_y)
-                bits_y = tf.nn.softmax_cross_entropy_with_logits_v2(
-                    labels=y_onehot, logits=y_logits) / np.log(2.)
-
-                # Classification accuracy
-                y_predicted = tf.argmax(y_logits, 1, output_type=tf.int32)
-                #######################################################
-                # classification_error = 1 - \
-                #     tf.cast(tf.equal(y_predicted, y), tf.float32)
-                classification_error = 0.
-
-            else:
-                bits_y = tf.zeros_like(bits_x)
-                classification_error = tf.ones_like(bits_x)
+            bits_y = tf.zeros_like(bits_x)
+            classification_error = tf.ones_like(bits_x)
 
             #tf.add_check_numerics_ops()
 
         return bits_x, bits_y, classification_error
 
     # === Sampling function
-    def f_decode(y, cond, eps_std):
-        y_onehot = tf.cast(tf.one_hot(y, hps.n_y, 1, 0), 'float32')
+    def f_decode(cond, eps_std):
         with tf.variable_scope('model', reuse=True):
-
-            _, sample = prior("prior", y_onehot, hps)
+            _, sample = prior("prior", hps, hps.local_batch_train)
             z = sample(eps_std)
 
             if cond is not None:
@@ -294,7 +267,7 @@ def model(sess, hps, train_iterator, test_iterator, data_init, train=True):
 
     def f_loss(iterator, reuse=False):
         if hps.direct_iterator and iterator is not None:
-            traj, y = iterator.get_next()
+            traj = iterator.get_next()
 
             start_ind = tf.random_uniform((),0, hps.seq_len-ncontxt, dtype=tf.int32)
             x = traj[:, start_ind + ncontxt]
@@ -305,15 +278,15 @@ def model(sess, hps, train_iterator, test_iterator, data_init, train=True):
                 cond = None
         else:
             if hps.cond == 1:
-                x, cond, y = X, Cond, Y
+                x, cond = X, Cond
             else:
-                x, cond, y = X, None, Y
+                x, cond = X, None
 
-        bits_x, bits_y, pred_loss = _f_loss(x, y, reuse, cond)
+        bits_x = _f_loss(x, reuse, cond)
 
-        local_loss = bits_x + hps.weight_y * bits_y
+        local_loss = bits_x
 
-        stats = [local_loss, bits_x, bits_y, pred_loss]
+        stats = [local_loss, bits_x]
         global_stats = Z.allreduce_mean(
             tf.stack([tf.reduce_mean(i) for i in stats]))
 
@@ -352,7 +325,7 @@ def model(sess, hps, train_iterator, test_iterator, data_init, train=True):
             x = postprocess(z)
         return x
 
-    feeds = {'x': X, 'cond':Cond, 'y': Y}
+    feeds = {'x': X, 'cond':Cond}
     m = abstract_model_xy(sess, hps, feeds, train_iterator,
                           test_iterator, data_init, lr, f_loss, train=train)
 
@@ -375,21 +348,18 @@ def model(sess, hps, train_iterator, test_iterator, data_init, train=True):
     else:
         cond_data = None
 
-    x_sampled = f_decode(Y, cond_data, m.eps_std)
+    x_sampled = f_decode(cond_data, m.eps_std)
 
-    def m_decode(_y, _eps_std):
-        return m.sess.run(x_sampled, {Y: _y, m.eps_std: _eps_std})
+    def m_decode(_eps_std):
+        return m.sess.run(x_sampled, {m.eps_std: _eps_std})
     m.decode = m_decode
 
     m.x_sampled = x_sampled
     m.x_sampled_grid_train = get_grid(x_sampled, 1, hps)
-    m.x_sampled_grid_test = get_grid(x_sampled, 0, hps)
-    m.Y = Y
+    # m.x_sampled_grid_test = get_grid(x_sampled, 0, hps)
 
     m.build_exmp_encoder = build_exmp_encoder
     m.build_exmp_decoder = build_exmp_decoder
-    m.Y = Y
-
     return m
 
 def get_grid(x_sampled, traincond, hps):
