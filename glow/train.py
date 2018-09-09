@@ -186,13 +186,12 @@ def main(hps):
 
         print('starting epoch: ', epoch)
         for it in range(hps.train_its):
+            tot_iter = it + epoch*hps.train_its
 
             if it % summ_interval == 0:
                 print('--------------------')
                 print('sampling images')
-                draw_samples(sess, hps, model, summary_writer, epoch, traincond=1)
-                # draw_samples(sess, hps, model, summary_writer, epoch, mode=0)
-
+                draw_samples(sess, hps, model, summary_writer, tot_iter, traincond=1)
 
             # Set learning rate, linearly annealed from 0 in the first hps.epochs_warmup epochs.
             lr = hps.lr * min(1., n_processed /
@@ -202,14 +201,14 @@ def main(hps):
             _t = time.time()
             sum_str, stats = model.train(lr)
 
-            if epoch % summ_interval == 0:
-                summary_writer.add_summary(sum_str, it + epoch*hps.train_its)
+            if it % summ_interval == 0:
+                summary_writer.add_summary(sum_str, tot_iter)
 
             if it % 100 == 0:
                 print('itr {} starting epoch {}, results [local_loss, bits_x, bits_y, pred_loss]: {}'.format(it, epoch, stats))
 
             # Images seen wrt anchor resolution
-            n_processed +=  hps.n_batch_train
+            n_processed += hps.n_batch_train
             # Actual images seen at current resolution
             n_images +=  hps.local_batch_train
 
@@ -302,10 +301,8 @@ if __name__ == "__main__":
                         help="# Threads for parallel map")
 
     # Optimization hyperparams:
-    parser.add_argument("--n_train", type=int,
-                        default=1.8e6, help="Train epoch size")
-    parser.add_argument("--n_test", type=int, default=9e4
-                        , help="Valid epoch size")
+    parser.add_argument("--n_train", type=int, default=1.8e6, help="Train epoch size")
+    parser.add_argument("--n_test", type=int, default=9e4, help="Valid epoch size")
     parser.add_argument("--n_batch_train", type=int,
                         default=64, help="Minibatch size")
     parser.add_argument("--n_batch_test", type=int,
