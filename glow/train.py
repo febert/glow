@@ -5,20 +5,18 @@
 import os
 import sys
 import time
-from data_loaders.read_tf_records2 import build_tfrecord_single
-from data_loaders.read_tf_records2 import CONF
+from glow.data_loaders.read_tf_records2 import build_tfrecord_single
+from glow.data_loaders.read_tf_records2 import CONF
 import matplotlib.pyplot as plt
 from tensorflow.python import debug as tf_debug
 
 
 import numpy as np
 import tensorflow as tf
-import graphics
-from utils import ResultLogger
 
 import pdb
 
-from data_loaders.get_data import make_batch
+from glow.data_loaders.get_data import make_batch
 
 learn = tf.contrib.learn
 
@@ -163,7 +161,7 @@ def main(hps):
         os.mkdir(logdir)
 
     # Create model
-    import model
+    import glow.model as model
     model = model.model(sess, hps, train_iterator, test_iterator, data_init)
     summary_writer = tf.summary.FileWriter(hps.logdir, graph=sess.graph, flush_secs=10)
 
@@ -197,8 +195,6 @@ def main(hps):
             lr = hps.lr * min(1., n_processed /
                               (hps.n_train * hps.epochs_warmup))
 
-            # Run a training step synchronously.
-            _t = time.time()
             sum_str, stats = model.train(lr)
 
             if it % summ_interval == 0:
@@ -212,6 +208,9 @@ def main(hps):
             # Actual images seen at current resolution
             n_images +=  hps.local_batch_train
 
+            if it % hps.save_interval == 0:
+                # Save checkpoint
+                model.save(logdir + "/model_{}.ckpt".format(it))
 
         dtrain = time.time() - t
         train_time += dtrain
@@ -227,9 +226,6 @@ def main(hps):
             test_loss, sum_str, _ = model.test()
             summary_writer.add_summary(sum_str, epoch)
 
-        if epoch % hps.save_interval == 0:
-            # Save checkpoint
-            model.save(logdir + "/model_epoch{}.ckpt".format(epoch))
 
     _print("Finished!")
 
@@ -367,7 +363,6 @@ if __name__ == "__main__":
                         help="Coupling type: 0=additive, 1=affine")
     parser.add_argument("--use_lu_decomp", type=int, default=0,
                         help="whether to use LU-Decomposition: 0=dont use, 1=use")
-
 
     hps = parser.parse_args()  # So error if typo
     main(hps)
