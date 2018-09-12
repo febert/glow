@@ -321,7 +321,7 @@ if __name__ == "__main__":
     parser.add_argument("--epochs_full_valid", type=int,
                         default=50, help="Epochs between valid")
     parser.add_argument("--save_interval", type=int,
-                        default=50, help="Epochs between save")
+                        default=5000, help="Epochs between save")
     parser.add_argument("--gradient_checkpointing", type=int,
                         default=1, help="Use memory saving gradients")
 

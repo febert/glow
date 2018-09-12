@@ -69,7 +69,7 @@ def abstract_model_xy(sess, hps, feeds, train_iterator, test_iterator, data_init
     # === Saving and restoring
     saver = tf.train.Saver(max_to_keep=3)
     if train:
-        saver_ema = tf.train.Saver(ema.variables_to_restore())
+        saver_ema = tf.train.Saver(ema.variables_to_restore(), max_to_keep=3)
         m.save_ema = lambda path: saver_ema.save(
             sess, path, write_meta_graph=False)
         m.save = lambda path: saver.save(sess, path, write_meta_graph=False)
