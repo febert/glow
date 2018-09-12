@@ -103,11 +103,11 @@ def get_hps():
     parser.add_argument("--flow_coupling", type=int, default=1,
                         help="Coupling type: 0=additive, 1=affine")
     parser.add_argument("--use_lu_decomp", type=int, default=0,
-                        help="whether to use LU-Decomposition: 0=dont use, 1=use"
+                        help="whether to use LU-Decomposition: 0=dont use, 1=use")
 
     return parser.parse_args()  # So error if typo
 
-def setup_embedding(conf, gpu_id = 0):
+def setup_embedding(gpu_id = 0):
     """
     Setup up the network for control
     :param conf_file:
@@ -127,11 +127,12 @@ def setup_embedding(conf, gpu_id = 0):
 
             hps = get_hps()
             base_dir = glow.__file__
-            hps.restore = '/'.join(str.split(base_dir, '/')[:-1]) + '/logs/cartgripper_xy/'
-            glowmodel = model(sess, hps, None, None, None)
+            hps.restore_path = '/'.join(str.split(base_dir, '/')[:-2]) + '/logs/cartgripper_xy/model_25000'
+            hps.direct_iterator = False
+            glowmodel = model(sess, hps, None, None, None, train=False)
 
             x1_pl = tf.placeholder(dtype=tf.float32, shape=[48,64])
-            lt1 = model.build_exmp_encoder(x1_pl, reuse=True)
+            lt1 = glowmodel.build_exmp_encoder(x1_pl, reuse=True)
 
     def get_embedding(image):
         feed_dict = {
@@ -141,3 +142,7 @@ def setup_embedding(conf, gpu_id = 0):
         return z_all
 
     return get_embedding
+
+
+if __name__ == '__main__':
+    f = setup_embedding()
